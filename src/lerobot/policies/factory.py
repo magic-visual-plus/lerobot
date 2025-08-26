@@ -74,6 +74,11 @@ def get_policy_class(name: str) -> PreTrainedPolicy:
         from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 
         return SmolVLAPolicy
+    elif name == "smolvla2":
+        from lerobot.policies.smolvla2.modeling_smolvla2 import SmolVLA2Policy
+
+        return SmolVLA2Policy
+    
     else:
         raise NotImplementedError(f"Policy with name {name} is not implemented.")
 

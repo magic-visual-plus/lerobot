@@ -126,10 +126,14 @@ def check_env_attributes_and_types(env: gym.vector.VectorEnv) -> None:
 
 def add_envs_task(env: gym.vector.VectorEnv, observation: dict[str, Any]) -> dict[str, Any]:
     """Adds task feature to the observation dict with respect to the first environment attribute."""
+    from gym_pusht.envs.pusht import PushTEnv
     if hasattr(env.envs[0], "task_description"):
         observation["task"] = env.call("task_description")
     elif hasattr(env.envs[0], "task"):
         observation["task"] = env.call("task")
+    elif isinstance(env.envs[0].env.env, PushTEnv):
+        num_envs = observation[list(observation.keys())[0]].shape[0]
+        observation["task"] = ["Push the T-shaped block onto the T-shaped target." for _ in range(num_envs)]
     else:  #  For envs without language instructions, e.g. aloha transfer cube and etc.
         num_envs = observation[list(observation.keys())[0]].shape[0]
         observation["task"] = ["" for _ in range(num_envs)]
