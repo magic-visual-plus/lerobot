@@ -18,6 +18,8 @@ Once you have trained a model with this script, you can try to evaluate it on
 examples/2_evaluate_pretrained_policy.py
 """
 
+import os
+os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com/'
 from pathlib import Path
 
 import torch
@@ -27,7 +29,6 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetad
 from lerobot.datasets.utils import dataset_to_policy_features
 from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.policies.diffusion.modeling_diffusion import DiffusionPolicy
-
 
 def main():
     # Create a directory to store the training checkpoint.
@@ -39,14 +40,16 @@ def main():
 
     # Number of offline training steps (we'll only do offline training for this example.)
     # Adjust as you prefer. 5000 steps are needed to get something worth evaluating.
-    training_steps = 5000
+    training_steps = 10000
     log_freq = 1
+    
+    dataset_name = "lerobot/pusht"
 
     # When starting from scratch (i.e. not from a pretrained policy), we need to specify 2 things before
     # creating the policy:
     #   - input/output shapes: to properly size the policy
     #   - dataset stats: for normalization and denormalization of input/outputs
-    dataset_metadata = LeRobotDatasetMetadata("lerobot/pusht")
+    dataset_metadata = LeRobotDatasetMetadata(dataset_name, root="/opt/projects/openpi/datasets/lerobot")
     features = dataset_to_policy_features(dataset_metadata.features)
     output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}
     input_features = {key: ft for key, ft in features.items() if key not in output_features}
@@ -59,6 +62,9 @@ def main():
     policy = DiffusionPolicy(cfg, dataset_stats=dataset_metadata.stats)
     policy.train()
     policy.to(device)
+    
+    print(f'dataset_metadata.fps is {dataset_metadata.fps}')
+    print(f'cfg.observation_delta_indices is {cfg.observation_delta_indices}')
 
     # Another policy-dataset interaction is with the delta_timestamps. Each policy expects a given number frames
     # which can differ for inputs, outputs and rewards (if there are some).
@@ -81,7 +87,7 @@ def main():
     }
 
     # We can then instantiate the dataset with these delta_timestamps configuration.
-    dataset = LeRobotDataset("lerobot/pusht", delta_timestamps=delta_timestamps)
+    dataset = LeRobotDataset(dataset_name, root="/opt/projects/openpi/datasets/lerobot", delta_timestamps=delta_timestamps)
 
     # Then we create our optimizer and dataloader for offline training.
     optimizer = torch.optim.Adam(policy.parameters(), lr=1e-4)
@@ -100,6 +106,18 @@ def main():
     while not done:
         for batch in dataloader:
             batch = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in batch.items()}
+            
+            # Convert absolute actions to delta actions
+            if 'action' in batch:
+                original_actions = batch['action'].clone()  # Keep original for debugging
+                
+                # Debug: Print comparison for first few steps
+                if step < 2:
+                    print(f"\nStep {step} - Action conversion:")
+                    print(f"Original actions[0, :4]: {original_actions[0, :4].cpu()}")
+                    print(f"Delta actions[0, :4]: {batch['action'][0, :4].cpu()}")
+                    print(f"Delta magnitudes: {torch.norm(batch['action'][0, :4], dim=-1).cpu()}")
+            
             loss, _ = policy.forward(batch)
             loss.backward()
             optimizer.step()

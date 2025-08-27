@@ -1,0 +1,11 @@
+lerobot-train \
+    --dataset.repo_id=lerobot/pusht \
+    --policy.type=diffusion \
+    --env.type=pusht \
+    --steps=10000 \
+    --wandb.enable=true \
+    --save_freq 5000 \
+    --resume false \
+    --output_dir=outputs/train/dp_pusht \
+    --job_name=dp_pusht \
+    --policy.push_to_hub=False

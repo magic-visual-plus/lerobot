@@ -40,11 +40,11 @@ output_directory.mkdir(parents=True, exist_ok=True)
 device = "cuda"
 
 # Provide the [hugging face repo id](https://huggingface.co/lerobot/diffusion_pusht):
-pretrained_policy_path = "lerobot/diffusion_pusht"
+# pretrained_policy_path = "lerobot/diffusion_pusht"
 # OR a path to a local outputs/train folder.
-# pretrained_policy_path = Path("outputs/train/example_pusht_diffusion")
+pretrained_policy_path = Path("outputs/train/example_pusht_diffusion")
 
-policy = DiffusionPolicy.from_pretrained(pretrained_policy_path)
+policy = DiffusionPolicy.from_pretrained(pretrained_name_or_path=pretrained_policy_path)
 
 # Initialize evaluation environment to render two observation types:
 # an image of the scene and state/position of the agent. The environment
@@ -52,7 +52,7 @@ policy = DiffusionPolicy.from_pretrained(pretrained_policy_path)
 env = gym.make(
     "gym_pusht/PushT-v0",
     obs_type="pixels_agent_pos",
-    max_episode_steps=300,
+    max_episode_steps=500,
 )
 
 # We can verify that the shapes of the features expected by the policy match the ones from the observations

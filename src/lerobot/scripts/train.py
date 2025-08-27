@@ -50,7 +50,8 @@ from lerobot.utils.utils import (
     has_method,
     init_logging,
 )
-from lerobot.utils.wandb_utils import WandBLogger
+# from lerobot.utils.wandb_utils import WandBLogger
+from lerobot.utils.swandb_util import SWandBLogger
 
 
 def update_policy(
@@ -111,10 +112,10 @@ def train(cfg: TrainPipelineConfig):
     logging.info(pformat(cfg.to_dict()))
 
     if cfg.wandb.enable and cfg.wandb.project:
-        wandb_logger = WandBLogger(cfg)
+        wandb_logger = SWandBLogger(cfg)
     else:
         wandb_logger = None
-        logging.info(colored("Logs will be saved locally.", "yellow", attrs=["bold"]))
+        logging.info(msg=colored("Logs will be saved locally.", "yellow", attrs=["bold"]))
 
     if cfg.seed is not None:
         set_seed(cfg.seed)
