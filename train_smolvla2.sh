@@ -6,7 +6,7 @@ HF_ENDPOINT=https://hf-mirror.com CUDA_VISIBLE_DEVICES="0" python -m lerobot.scr
   --batch_size=64 \
   --steps=100000 \
   --policy.freeze_vision_encoder=false  --policy.train_expert_only=false \
-  --wandb.enable=false \
+  --wandb.enable=true \
   --save_freq 10000 \
   --output_dir=outputs/train/libero_smolvla2_scratch \
   --job_name=libero_smolvla2_scratch \
