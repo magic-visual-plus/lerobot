@@ -27,8 +27,8 @@ from lerobot.optim.schedulers import (
 class SmolVLA2Config(PreTrainedConfig):
     # Input / output structure.
     n_obs_steps: int = 1
-    chunk_size: int = 8
-    n_action_steps: int = 8
+    chunk_size: int = 24
+    n_action_steps: int = 24
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
@@ -90,6 +90,9 @@ class SmolVLA2Config(PreTrainedConfig):
     attention_mode: str = "cross_attn"
 
     prefix_length: int = -1
+    max_image_text_length: int = 1024
+    max_state_length: int = 256
+    
 
     pad_language_to: str = "longest"  # "max_length"
 

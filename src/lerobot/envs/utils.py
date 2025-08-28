@@ -127,7 +127,11 @@ def check_env_attributes_and_types(env: gym.vector.VectorEnv) -> None:
 def add_envs_task(env: gym.vector.VectorEnv, observation: dict[str, Any]) -> dict[str, Any]:
     """Adds task feature to the observation dict with respect to the first environment attribute."""
     from gym_pusht.envs.pusht import PushTEnv
-    if hasattr(env.envs[0], "task_description"):
+    from gym_aloha.env import AlohaEnv
+    if isinstance(env.envs[0].env.env, AlohaEnv) and env.envs[0].env.env.task == 'insertion':
+        num_envs = observation[list(observation.keys())[0]].shape[0]
+        observation["task"] = ["Insert the peg into the socket." for _ in range(num_envs)]
+    elif hasattr(env.envs[0], "task_description"):
         observation["task"] = env.call("task_description")
     elif hasattr(env.envs[0], "task"):
         observation["task"] = env.call("task")

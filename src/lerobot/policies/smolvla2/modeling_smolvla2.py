@@ -610,7 +610,7 @@ class OutputProjectionMLP(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim):
         super().__init__()
         self.input_linear = nn.Linear(input_dim, hidden_dim)
-        self.activation = nn.ReLU()
+        self.activation = nn.SiLU() # swish == silu
         self.norm = nn.BatchNorm1d(hidden_dim)
         self.output_linear = nn.Linear(hidden_dim, output_dim)
 
@@ -784,7 +784,7 @@ class VLAFlowMatching(nn.Module):
         )
 
         # restart position for states
-        current_position = 0
+        current_position = self.config.max_image_text_length
         state_emb = self.state_proj(state)
         state_emb = state_emb[:, None, :] if state_emb.ndim == 2 else state_emb
         embs.append(state_emb)
@@ -847,8 +847,9 @@ class VLAFlowMatching(nn.Module):
         bsize, action_time_dim = action_time_emb.shape[:2]
         action_time_mask = torch.ones(bsize, action_time_dim, dtype=torch.bool, device=device)
         pad_masks.append(action_time_mask)
+        start_position_id = self.config.max_image_text_length + self.config.max_state_dim
         position_ids.append(
-            torch.zeros_like(action_time_mask, dtype=torch.long, device=device)
+            torch.cumsum(action_time_mask.type(torch.long), dim=1) - 1 + start_position_id
         )
 
         # Set attention masks so that image, language and state inputs do not attend to action tokens

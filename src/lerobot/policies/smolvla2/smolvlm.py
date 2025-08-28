@@ -149,15 +149,22 @@ class SmolVLM(nn.Module):
         inputs_embeds: list[torch.FloatTensor] = None,
         use_cache: bool | None = None,
     ):
-        
+        num_action_emb = inputs_embeds[1].shape[1]
         embs = torch.cat(inputs_embeds, dim=1)
         attention_mask = torch.cat(attention_mask, dim=1)
         position_ids = torch.cat(position_ids, dim=1)
+
+        # attention_mask: [B, L]
+        attention_mask = attention_mask[:, None, :] * attention_mask[:, :, None]
+        # attention_mask: [B, L, L]
+        # action should not attend to observations
+        # attention_mask[:, :-num_action_emb, -num_action_emb:] = 0
+        attention_mask = attention_mask.unsqueeze(1)  # [B, 1, L, L]
         
         dtype_vlm = self.get_vlm_model().text_model.get_input_embeddings().weight.dtype
         dtype = embs.dtype
         embs = embs.to(dtype=dtype_vlm)
-        attention_mask = attention_mask.to(dtype=dtype_vlm)
+        # attention_mask = attention_mask.to(dtype=dtype_vlm)
         if past_key_values is not None:
             past_key_values = [
                 (past_kv[0].to(dtype=dtype_vlm), past_kv[1].to(dtype=dtype_vlm))
