@@ -8,6 +8,7 @@ import dataclasses
 import logging
 import math
 import multiprocessing
+
 from multiprocessing.pool import Pool
 import time
 import math
@@ -30,6 +31,21 @@ from typing import Any, Dict, List, Optional
 
 from lerobot.policies.smolvla2.modeling_smolvla2 import SmolVLA2Policy
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+
+import sys
+
+def get_appropriate_start_method():
+    """根据平台选择合适的启动方法"""
+    if sys.platform == 'win32':
+        return 'spawn'  # Windows 只支持 spawn
+    else:
+        # Unix-like 系统可以根据需要选择
+        # return 'fork'    # 默认，快速但可能有线程安全问题
+        # return 'spawn'   # 更安全但稍慢
+        return 'forkserver'  # 折中方案，专用服务器进程管理fork
+    
+    
 
 LIBERO_DUMMY_ACTION = [0.0] * 6 + [-1.0]
 LIBERO_ENV_RESOLUTION = 256  # resolution used to render training data
@@ -271,9 +287,9 @@ def eval_libero(args: Args) -> EvalResult:
         writer.close()
         logging.info(f"Saved video to {video_path}")
         # import ipdb; ipdb.set_trace()
-
-        # Log current results
-        logging.info(f"Success: {done}")
+        if task_episodes > 0:
+            logging.info(f"# task {task_id} episodes completed so far: {task_episodes}")
+            logging.info(f"# task {task_id} successes: {task_successes} ({task_successes / task_episodes * 100:.1f}%)")
 
     # Log final results for the task
     if task_episodes > 0:
@@ -335,9 +351,12 @@ def batch_eval(args: Args) -> None:
     # init process pools size is env_size 
     pool =  Pool(processes=args.env_size)
     result_futures = []
+    # TODO disable later
+    # num_tasks_in_suite = 1
     for i in range(num_tasks_in_suite):
         args_cp = copy.deepcopy(args)
         args_cp.task_id = i
+        # eval_libero(args_cp)
         result = pool.apply_async(eval_libero, (args_cp,))
         result_futures.append(result)
         
@@ -359,8 +378,12 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
         handlers=[
-            logging.FileHandler("evaluation_log.txt"),
+            logging.FileHandler("evaluation_batch_log.txt"),
             logging.StreamHandler()  # Optional: keeps logging in the terminal too
         ]
     )
+    
+    start_method = get_appropriate_start_method()
+    logging.info(f"processor Using start method: {start_method}")
+    multiprocessing.set_start_method(start_method)
     batch_eval()
