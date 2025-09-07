@@ -92,7 +92,8 @@ class LeRobotDatasetMetadata:
             if force_cache_sync:
                 raise FileNotFoundError
             self.load_metadata()
-        except (FileNotFoundError, NotADirectoryError):
+        except (FileNotFoundError, NotADirectoryError) as e:
+            print(f"Metadata not found locally ({e}), downloading from the Hub at {self.repo_id}.")
             if is_valid_version(self.revision):
                 self.revision = get_safe_version(self.repo_id, self.revision)
 

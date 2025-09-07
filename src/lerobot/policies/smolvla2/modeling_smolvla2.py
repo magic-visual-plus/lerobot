@@ -75,6 +75,7 @@ from lerobot.policies.utils import (
     populate_queues,
 )
 from lerobot.utils.utils import get_safe_dtype
+import time
 
 # Matches ".soNNN", optionally followed by "-something", up to the "_buffer_" marker
 _VARIANT_RE = re.compile(r"\.so\d+(?:-[\w]+)?_buffer_")
@@ -346,8 +347,13 @@ class SmolVLA2Policy(PreTrainedPolicy):
         self.unnormalize_outputs = Unnormalize(
             config.output_features, config.normalization_mapping, dataset_stats
         )
-
-        self.language_tokenizer = AutoProcessor.from_pretrained(self.config.vlm_model_name).tokenizer
+        print(f'self.config.vlm_model_name is {self.config.vlm_model_name}')
+        # self.config.vlm_model_name = "/home/superfun77/.cache/huggingface/hub/models--HuggingFaceTB--SmolVLM2-256M-Video-Instruct/snapshots/067788b187b95ebe7b2e040b3e4299e342e5b8fd"
+        # vlm_model_name = self.config.vlm_model_name
+        # vlm_model_name = "/home/superfun77/.cache/huggingface/hub/models--HuggingFaceTB--SmolVLM2-256M-Video-Instruct/snapshots/067788b187b95ebe7b2e040b3e4299e342e5b8fd"
+        processor = AutoProcessor.from_pretrained(self.config.vlm_model_name)
+        self.language_tokenizer = processor.tokenizer
+        # import ipdb; ipdb.set_trace()
         self.model = VLAFlowMatching(config)
         self.reset()
 
@@ -386,15 +392,18 @@ class SmolVLA2Policy(PreTrainedPolicy):
         for k in batch:
             if k in self._queues and k != ACTION:
                 batch[k] = torch.stack(list(self._queues[k]), dim=1)
-
+        start = time.time()
         images, img_masks = self.prepare_images(batch)
         state = self.prepare_state(batch)
         lang_tokens, lang_masks = self.prepare_language(batch)
+        end = time.time()
+        # print(f"Prepare time: {(end-start) * 1000 :.2f}ms")
 
         actions = self.model.sample_actions(images, img_masks, lang_tokens, lang_masks, state, noise=noise)
 
         # Unpad actions
         original_action_dim = self.config.action_feature.shape[0]
+        # original_action_dim = 7
         actions = actions[:, :, :original_action_dim]
 
         actions = self.unnormalize_outputs({ACTION: actions})[ACTION]
@@ -430,6 +439,11 @@ class SmolVLA2Policy(PreTrainedPolicy):
         environment. It works by managing the actions in a queue and only calling `select_actions` when the
         queue is empty.
         """
+        # import ipdb; ipdb.set_trace()
+        if 'state' in batch:
+            batch[OBS_STATE] = batch['state']
+            batch['observation.images.image'] = batch['image']
+            batch['observation.images.wrist_image'] = batch['wrist_image']
         self.eval()
         batch = self._prepare_batch(batch)
         self._queues = populate_queues(self._queues, batch, exclude_keys=[ACTION])
@@ -901,18 +915,25 @@ class VLAFlowMatching(nn.Module):
         if noise is None:
             actions_shape = (bsize, self.config.chunk_size, self.config.max_action_dim)
             noise = self.sample_noise(actions_shape, device)
-
+        # print(f"Sampling noises: {noise}")
+        import time
+        start = time.time()
         prefix_embs, prefix_pad_masks, prefix_position_ids = self.embed_prefix(
             images, img_masks, lang_tokens, lang_masks, state=state
         )
-
+        end = time.time()
+        # print(f"Embedding time: {(end-start) * 1000 :.2f}ms")
+        # print(f'denoice steps {self.config.num_steps}')
+        # TODO disable later
+        # self.config.num_steps = 2
         dt = -1.0 / self.config.num_steps
         dt = torch.tensor(dt, dtype=torch.float32, device=device)
 
         x_t = noise
-        time = torch.tensor(1.0, dtype=torch.float32, device=device)
-        while time >= -dt / 2:
-            expanded_time = time.expand(bsize)
+        time_t = torch.tensor(1.0, dtype=torch.float32, device=device)
+        start = time.time()
+        while time_t >= -dt / 2:
+            expanded_time = time_t.expand(bsize)
             v_t = self.denoise_step(
                 prefix_embs,
                 prefix_pad_masks,
@@ -922,7 +943,9 @@ class VLAFlowMatching(nn.Module):
             )
             # Euler step
             x_t += dt * v_t
-            time += dt
+            time_t += dt
+        end = time.time()
+        # print(f"denoise_step time: {(end-start) * 1000 :.2f}ms")
         return x_t
 
     def denoise_step(
