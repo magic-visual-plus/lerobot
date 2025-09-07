@@ -1,0 +1,1 @@
+proxychains python /opt/projects/news/lerobot/examples/libero/eval_smol2_batch.py --policy_path=/opt/projects/news/lerobot/ckpts/autodl/040000/pretrained_model --video_out_path=data/libero/videos_goal_0903_ck_100 --task_suite_name=libero_goal --env_size=5
