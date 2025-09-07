@@ -270,10 +270,18 @@ def train(cfg: TrainPipelineConfig):
         batch = next(dl_iter)
         train_tracker.dataloading_s = time.perf_counter() - start_time
 
+        # Move batch to device - accelerate should handle this automatically for multi-GPU
         if not accelerator:
             for key in batch:
                 if isinstance(batch[key], torch.Tensor):
                     batch[key] = batch[key].to(device, non_blocking=device.type == "cuda")
+        else:
+            # When using accelerate, ensure all tensors are on the same device as the model
+            # This helps resolve device mismatch issues in multi-GPU setups
+            model_device = next(policy.parameters()).device
+            for key in batch:
+                if isinstance(batch[key], torch.Tensor):
+                    batch[key] = batch[key].to(model_device, non_blocking=True)
 
         train_tracker, output_dict = update_policy(
             train_tracker,

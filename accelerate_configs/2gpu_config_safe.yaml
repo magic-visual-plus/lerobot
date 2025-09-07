@@ -16,3 +16,5 @@ tpu_use_cluster: false
 tpu_use_sudo: false
 use_cpu: false
 dynamo_backend: "no"
+fsdp_config: {}
+deepspeed_config: {}

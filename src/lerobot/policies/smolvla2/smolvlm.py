@@ -68,9 +68,11 @@ class SmolVLM(nn.Module):
         super().__init__()
         if load_vlm_weights:
             print(f"Loading  {model_id} weights ...")
+            # In multi-GPU training, avoid device_map="auto" to prevent device mismatch
+            # Let accelerate handle device placement instead
             self.vlm = AutoModelForImageTextToText.from_pretrained(
                 model_id,
-                device_map="auto",
+                device_map=None,  # Changed from "auto" to None for multi-GPU compatibility
                 torch_dtype="bfloat16",
                 low_cpu_mem_usage=True,
             )
