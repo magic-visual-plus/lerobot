@@ -16,7 +16,7 @@
 <!-- Use [dygraphs](https://dygraphs.com/), a lightweight JS charting library -->
 <body class="flex flex-col md:flex-row h-screen max-h-screen bg-slate-950 text-gray-200" x-data="createAlpineData()">
     <!-- Sidebar -->
-    <div x-ref="sidebar" class="bg-slate-900 p-5 break-words overflow-y-auto shrink-0 md:shrink md:w-60 md:max-h-screen">
+    <div x-ref="sidebar" class="bg-slate-900 p-5 break-words overflow-y-auto shrink-0 md:shrink md:w-80 md:max-h-screen">
         <a href="https://github.com/huggingface/lerobot" target="_blank" class="hidden md:block">
             <img src="https://github.com/huggingface/lerobot/raw/main/media/lerobot-logo-thumbnail.png">
         </a>
@@ -37,56 +37,110 @@
         </ul>
 
         <p>Episodes:</p>
+        <!-- Search functionality -->
+        <div class="mb-4">
+            <div class="relative">
+                <input type="text" 
+                       x-model="searchQuery"
+                       placeholder="Search episodes by instruction..."
+                       class="w-full px-3 py-2 pr-10 text-sm bg-slate-800 border border-slate-600 rounded-md text-gray-200 placeholder-gray-400 focus:outline-none focus:border-slate-500"
+                       @input="resetPagination()">
+                <button x-show="searchQuery.length > 0"
+                        @click="searchQuery = ''; updateSearchURL();"
+                        class="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-200 focus:outline-none"
+                        title="Clear search">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+            <p class="text-xs text-gray-400 mt-1" x-show="filteredEpisodes.length !== episodes.length" x-text="`Showing ${filteredEpisodes.length} of ${episodes.length} episodes`"></p>
+        </div>
+        <!-- {{ language_instructions }} -->
         <!-- episodes menu for medium & large screens -->
-        <div class="ml-2 hidden md:block" x-data="episodePagination">
+        <div class="ml-2 hidden md:block">
             <ul>
-                <template x-for="episode in paginatedEpisodes" :key="episode">
-                    <li class="font-mono text-sm mt-0.5">
-                        <a :href="'episode_' + episode"
-                           :class="{'underline': true, 'font-bold -ml-1': episode == {{ episode_id }}}"
-                           x-text="'Episode ' + episode"></a>
+                <template x-for="(episode, index) in filteredEpisodes.slice((currentPage - 1) * pageSize, currentPage * pageSize)" :key="episode">
+                    <li class="font-mono text-sm mt-0.5"
+                        :class="{'bg-slate-700 rounded-md px-2 py-1 border-l-4 border-blue-500': episode == {{ episode_id }}}">
+                        <a :href="'episode_' + episode + (searchQuery ? '?search=' + encodeURIComponent(searchQuery) : '')"
+                           :class="{
+                               'underline': true, 
+                               'font-bold text-blue-300': episode == {{ episode_id }},
+                               'text-gray-200': episode != {{ episode_id }}
+                           }"
+                           x-text="'Episode ' + episode + ' - ' + (languageInstructions[episode] || '')"></a>
                     </li>
                 </template>
             </ul>
 
             <div class="flex items-center mt-3 text-xs" x-show="totalPages > 1">
-                <button @click="prevPage()"
+                <button @click="currentPage = Math.max(1, currentPage - 1)"
                         class="px-2 py-1 bg-slate-800 rounded mr-2"
-                        :class="{'opacity-50 cursor-not-allowed': page === 1}"
-                        :disabled="page === 1">
+                        :class="{'opacity-50 cursor-not-allowed': currentPage === 1}"
+                        :disabled="currentPage === 1">
                     &laquo; Prev
                 </button>
-                <span class="font-mono mr-2" x-text="` ${page} / ${totalPages}`"></span>
-                <button @click="nextPage()"
+                <span class="font-mono mr-2" x-text="`${currentPage} / ${totalPages}`"></span>
+                <button @click="currentPage = Math.min(totalPages, currentPage + 1)"
                         class="px-2 py-1 bg-slate-800 rounded"
-                        :class="{'opacity-50 cursor-not-allowed': page === totalPages}"
-                        :disabled="page === totalPages">
+                        :class="{'opacity-50 cursor-not-allowed': currentPage === totalPages}"
+                        :disabled="currentPage === totalPages">
                     Next &raquo;
                 </button>
             </div>
         </div>
 
         <!-- episodes menu for small screens -->
-        <div class="flex overflow-x-auto md:hidden" x-data="episodePagination">
-            <button @click="prevPage()"
+        <div class="md:hidden">
+            <div class="flex overflow-x-auto">
+            <button @click="currentPage = Math.max(1, currentPage - 1)"
                     class="px-2 bg-slate-800 rounded mr-2"
-                    :class="{'opacity-50 cursor-not-allowed': page === 1}"
-                    :disabled="page === 1">&laquo;</button>
+                    :class="{'opacity-50 cursor-not-allowed': currentPage === 1}"
+                    :disabled="currentPage === 1">&laquo;</button>
             <div class="flex">
-                <template x-for="(episode, index) in paginatedEpisodes" :key="episode">
-                    <p class="font-mono text-sm mt-0.5 px-2"
-                       :class="{
-                           'font-bold': episode == {{ episode_id }},
-                           'border-r': index !== paginatedEpisodes.length - 1
-                       }">
-                        <a :href="'episode_' + episode" x-text="episode"></a>
-                    </p>
+                <template x-for="(episode, index) in filteredEpisodes.slice((currentPage - 1) * pageSize, currentPage * pageSize)" :key="episode">
+                    <div class="flex flex-col"
+                         :class="{'bg-slate-700 rounded px-1 border-l-2 border-blue-500': episode == {{ episode_id }}}">
+                        <p class="font-mono text-sm mt-0.5 px-2"
+                           :class="{
+                               'font-bold text-blue-300': episode == {{ episode_id }},
+                               'text-gray-200': episode != {{ episode_id }},
+                               'border-r': index !== (filteredEpisodes.slice((currentPage - 1) * pageSize, currentPage * pageSize).length - 1)
+                           }">
+                            <a :href="'episode_' + episode + (searchQuery ? '?search=' + encodeURIComponent(searchQuery) : '')" x-text="episode"></a>
+                        </p>
+                        <p class="text-xs px-2"
+                           :class="{
+                               'text-blue-200': episode == {{ episode_id }},
+                               'text-gray-400': episode != {{ episode_id }}
+                           }"
+                           x-text="languageInstructions[episode] || ''"></p>
+                    </div>
                 </template>
             </div>
-            <button @click="nextPage()"
+            <button @click="currentPage = Math.min(totalPages, currentPage + 1)"
                     class="px-2 bg-slate-800 rounded ml-2"
-                    :class="{'opacity-50 cursor-not-allowed': page === totalPages}"
-                    :disabled="page === totalPages">&raquo; </button>
+                    :class="{'opacity-50 cursor-not-allowed': currentPage === totalPages}"
+                    :disabled="currentPage === totalPages">&raquo; </button>
+            </div>
+            
+            <!-- Pagination for small screens -->
+            <div class="flex items-center mt-3 text-xs" x-show="totalPages > 1">
+                <button @click="currentPage = Math.max(1, currentPage - 1)"
+                        class="px-2 py-1 bg-slate-800 rounded mr-2"
+                        :class="{'opacity-50 cursor-not-allowed': currentPage === 1}"
+                        :disabled="currentPage === 1">
+                    &laquo; Prev
+                </button>
+                <span class="font-mono mr-2" x-text="`${currentPage} / ${totalPages}`"></span>
+                <button @click="currentPage = Math.min(totalPages, currentPage + 1)"
+                        class="px-2 py-1 bg-slate-800 rounded"
+                        :class="{'opacity-50 cursor-not-allowed': currentPage === totalPages}"
+                        :disabled="currentPage === totalPages">
+                    Next &raquo;
+                </button>
+            </div>
         </div>
 
     </div>
@@ -306,9 +360,25 @@
                 videosKeys: {{ videos_info | map(attribute='filename') | list | tojson }},
                 videosKeysSelected: [],
                 columns: {{ columns | tojson }},
+                languageInstructions: {{ language_instructions | tojson }},
+                searchQuery: '',
+                episodes: {{ episodes }},
+                currentPage: 1,
+                pageSize: 1000,
 
                 // alpine initialization
                 init() {
+                    // Restore search query from URL parameters
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const searchParam = urlParams.get('search');
+                    if (searchParam) {
+                        this.searchQuery = decodeURIComponent(searchParam);
+                    }
+
+                    // Set initial page based on current episode
+                    const currentEpisodeId = {{ episode_id }};
+                    this.adjustPageForCurrentEpisode(currentEpisodeId);
+
                     // check if videos can play
                     const dummyVideo = document.createElement('video');
                     const canPlayVideos = dummyVideo.canPlayType('video/mp4; codecs="av01.0.05M.08"'); // codec source: https://huggingface.co/blog/video-encoding#results
@@ -373,6 +443,23 @@
                                 }
                             }
                         },
+                    });
+
+                    // Watch for search query changes to update URL
+                    this.$watch('searchQuery', () => {
+                        const currentEpisodeId = {{ episode_id }};
+                        this.adjustPageForCurrentEpisode(currentEpisodeId);
+                        this.updateSearchURL();
+                        
+                        // Scroll to current episode after search changes
+                        this.$nextTick(() => {
+                            this.scrollToCurrentEpisode();
+                        });
+                    });
+
+                    // Scroll to current episode after initialization
+                    this.$nextTick(() => {
+                        this.scrollToCurrentEpisode();
                     });
                 },
 
@@ -475,48 +562,90 @@
                         // start autoplay all videos in sync
                         this.$refs.btnPlay.click();
                     }
-                }
+                },
+
+                // Computed property for filtered episodes
+                get filteredEpisodes() {
+                    if (!this.searchQuery.trim()) {
+                        return this.episodes;
+                    }
+                    const query = this.searchQuery.toLowerCase();
+                    return this.episodes.filter(episode => {
+                        const instruction = this.languageInstructions[episode] || '';
+                        return instruction.toLowerCase().includes(query);
+                    });
+                },
+
+                // Computed property for total pages
+                get totalPages() {
+                    return Math.ceil(this.filteredEpisodes.length / this.pageSize);
+                },
+
+                // Reset pagination when search changes (called manually for clear button)
+                resetPagination() {
+                    const currentEpisodeId = {{ episode_id }};
+                    this.adjustPageForCurrentEpisode(currentEpisodeId);
+                    this.updateSearchURL();
+                },
+
+                // Update URL with search parameter
+                updateSearchURL() {
+                    const url = new URL(window.location.href);
+                    const params = new URLSearchParams(url.search);
+                    
+                    if (this.searchQuery.trim()) {
+                        params.set('search', encodeURIComponent(this.searchQuery));
+                    } else {
+                        params.delete('search');
+                    }
+                    
+                    url.search = params.toString();
+                    window.history.replaceState({}, '', url.toString());
+                },
+
+                // Scroll to current episode in the episode list
+                scrollToCurrentEpisode() {
+                    const currentEpisodeId = {{ episode_id }};
+                    // Find the current episode link in both desktop and mobile views
+                    const episodeLinks = document.querySelectorAll(`a[href*="episode_${currentEpisodeId}"]`);
+                    
+                    episodeLinks.forEach(link => {
+                        const listItem = link.closest('li') || link.closest('div');
+                        if (listItem && listItem.offsetParent) {
+                            // Check if the element is visible (not hidden by pagination or search)
+                            const isVisible = this.filteredEpisodes.includes(currentEpisodeId);
+                            if (isVisible) {
+                                // Scroll the sidebar to show the current episode
+                                const sidebar = this.$refs.sidebar;
+                                const listItemTop = listItem.offsetTop;
+                                const sidebarHeight = sidebar.clientHeight;
+                                const scrollTop = listItemTop - (sidebarHeight / 2) + (listItem.offsetHeight / 2);
+                                
+                                sidebar.scrollTo({
+                                    top: Math.max(0, scrollTop),
+                                    behavior: 'smooth'
+                                });
+                            }
+                        }
+                    });
+                },
+
+                // Adjust pagination to show the current episode
+                adjustPageForCurrentEpisode(currentEpisodeId) {
+                    const episodeIndex = this.filteredEpisodes.indexOf(currentEpisodeId);
+                    if (episodeIndex !== -1) {
+                        const targetPage = Math.floor(episodeIndex / this.pageSize) + 1;
+                        this.currentPage = targetPage;
+                    } else {
+                        // If current episode is not in filtered results, stay on page 1
+                        this.currentPage = 1;
+                    }
+                },
             };
         }
 
         document.addEventListener('alpine:init', () => {
-            // Episode pagination component
-            Alpine.data('episodePagination', () => ({
-                episodes: {{ episodes }},
-                pageSize: 100,
-                page: 1,
-
-                init() {
-                    // Find which page contains the current episode_id
-                    const currentEpisodeId = {{ episode_id }};
-                    const episodeIndex = this.episodes.indexOf(currentEpisodeId);
-                    if (episodeIndex !== -1) {
-                        this.page = Math.floor(episodeIndex / this.pageSize) + 1;
-                    }
-                },
-
-                get totalPages() {
-                    return Math.ceil(this.episodes.length / this.pageSize);
-                },
-
-                get paginatedEpisodes() {
-                    const start = (this.page - 1) * this.pageSize;
-                    const end = start + this.pageSize;
-                    return this.episodes.slice(start, end);
-                },
-
-                nextPage() {
-                    if (this.page < this.totalPages) {
-                        this.page++;
-                    }
-                },
-
-                prevPage() {
-                    if (this.page > 1) {
-                        this.page--;
-                    }
-                }
-            }));
+            // No additional components needed
         });
     </script>
 
@@ -526,17 +655,47 @@
             const { keyCode, key } = e;
 
             if (keyCode === 32 || key === ' ') {
-                e.preventDefault();
-                const btnPause = document.querySelector('[x-ref="btnPause"]');
-                const btnPlay = document.querySelector('[x-ref="btnPlay"]');
-                btnPause.classList.contains('hidden') ? btnPlay.click() : btnPause.click();
+                // Don't prevent default if focus is on an input, textarea, or contenteditable element
+                const activeElement = document.activeElement;
+                const isInputField = activeElement && (
+                    activeElement.tagName === 'INPUT' ||
+                    activeElement.tagName === 'TEXTAREA' ||
+                    activeElement.contentEditable === 'true'
+                );
+                
+                if (!isInputField) {
+                    e.preventDefault();
+                    const btnPause = document.querySelector('[x-ref="btnPause"]');
+                    const btnPlay = document.querySelector('[x-ref="btnPlay"]');
+                    btnPause.classList.contains('hidden') ? btnPlay.click() : btnPause.click();
+                }
             } else if (key === 'ArrowDown' || key === 'ArrowUp') {
-                const episodes = {{ episodes }};  // Access episodes directly from the Jinja template
-                const nextEpisodeId = key === 'ArrowDown' ? {{ episode_id }} + 1 : {{ episode_id }} - 1;
-                const lowestEpisodeId = episodes.at(0);
-                const highestEpisodeId = episodes.at(-1);
-                if (nextEpisodeId >= lowestEpisodeId && nextEpisodeId <= highestEpisodeId) {
-                    window.location.href = `./episode_${nextEpisodeId}`;
+                // Get Alpine.js data to access filtered episodes
+                const alpineData = document.querySelector('[x-data]')._x_dataStack[0];
+                if (alpineData && alpineData.filteredEpisodes) {
+                    const currentEpisodeId = {{ episode_id }};
+                    const filteredEpisodes = alpineData.filteredEpisodes;
+                    const currentIndex = filteredEpisodes.indexOf(currentEpisodeId);
+                    
+                    if (currentIndex !== -1) {
+                        let nextIndex;
+                        if (key === 'ArrowDown') {
+                            nextIndex = currentIndex + 1;
+                        } else {
+                            nextIndex = currentIndex - 1;
+                        }
+                        
+                        // Check if next index is valid in filtered results
+                        if (nextIndex >= 0 && nextIndex < filteredEpisodes.length) {
+                            const nextEpisodeId = filteredEpisodes[nextIndex];
+                            
+                            // Get current search query from URL and include it in navigation
+                            const urlParams = new URLSearchParams(window.location.search);
+                            const searchParam = urlParams.get('search');
+                            const searchQuery = searchParam ? `?search=${encodeURIComponent(searchParam)}` : '';
+                            window.location.href = `./episode_${nextEpisodeId}${searchQuery}`;
+                        }
+                    }
                 }
             }
         });

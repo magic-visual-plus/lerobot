@@ -212,12 +212,18 @@ def run_server(
             episodes = list(
                 range(dataset.num_episodes if isinstance(dataset, LeRobotDataset) else dataset.total_episodes)
             )
-
+        language_instructions = []
+        for episode_idx in episodes:
+            episode_tasks = dataset.meta.episodes[episode_idx]["tasks"]
+            language_instructions.append(episode_tasks[0])
+        print(f'language_instructions: {language_instructions}')
+        print(f'episodes: {episodes}')
         return render_template(
             "visualize_dataset_template.html",
             episode_id=episode_id,
             episodes=episodes,
             dataset_info=dataset_info,
+            language_instructions=language_instructions,
             videos_info=videos_info,
             episode_data_csv_str=episode_data_csv_str,
             columns=columns,
@@ -433,7 +439,7 @@ def main():
     parser.add_argument(
         "--host",
         type=str,
-        default="127.0.0.1",
+        default="0.0.0.0",
         help="Web host used by the http server.",
     )
     parser.add_argument(
