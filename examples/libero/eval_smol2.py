@@ -22,6 +22,7 @@ from tqdm import tqdm
 
 
 from lerobot.policies.smolvla2.modeling_smolvla2 import SmolVLA2Policy
+from lerobot.policies.pretrained import PreTrainedPolicy
 # torch.serialization.add_safe_globals([np.core.multiarray._reconstruct])
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -89,6 +90,23 @@ class Args:
     """Random Seed (for reproducibility)"""
 
 
+
+def init_policy(args: Args):
+    policy = SmolVLA2Policy.from_pretrained(args.policy_path)
+     # Handle accelerate-wrapped models by unwrapping them
+    if hasattr(policy, 'module') and isinstance(policy.module, PreTrainedPolicy):
+        print("got accelerate model")
+        # This is likely an accelerate-wrapped model (DistributedDataParallel)
+        policy: PreTrainedPolicy = policy.module
+     
+    print(f'n_action_steps:{policy.config.n_action_steps}')
+    policy.config.n_action_steps = 8
+    print(f'after reset n_action_steps:{policy.config.n_action_steps}')
+    policy.to(args.device)
+    policy.eval()
+    return policy
+
+
 @draccus.wrap()
 def eval_libero(args: Args) -> None:
     # Set random seed
@@ -96,9 +114,7 @@ def eval_libero(args: Args) -> None:
     np.random.seed(args.seed)
 
     # --- Load Policy ---
-    policy = SmolVLA2Policy.from_pretrained(args.policy_path)
-    policy.to(args.device)
-    policy.eval()
+    policy = init_policy(args)
 
     # --- Initialize LIBERO task suite ---
     benchmark_dict = benchmark.get_benchmark_dict()

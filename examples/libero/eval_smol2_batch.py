@@ -29,6 +29,8 @@ import random
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional
 
+from lerobot.configs.policies import PreTrainedConfig
+from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.smolvla2.modeling_smolvla2 import SmolVLA2Policy
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -129,8 +131,18 @@ def set_seed(seed: int):
     torch.cuda.manual_seed_all(seed)
     
 
+
 def init_policy(args: Args):
     policy = SmolVLA2Policy.from_pretrained(args.policy_path)
+     # Handle accelerate-wrapped models by unwrapping them
+    if hasattr(policy, 'module') and isinstance(policy.module, PreTrainedPolicy):
+        print("got accelerate model")
+        # This is likely an accelerate-wrapped model (DistributedDataParallel)
+        policy: PreTrainedPolicy = policy.module
+     
+    print(f'n_action_steps:{policy.config.n_action_steps}')
+    policy.config.n_action_steps = 8
+    print(f'after reset n_action_steps:{policy.config.n_action_steps}')
     policy.to(args.device)
     policy.eval()
     return policy
