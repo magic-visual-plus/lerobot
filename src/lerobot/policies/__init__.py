@@ -19,3 +19,4 @@ from .smolvla.configuration_smolvla import SmolVLAConfig as SmolVLAConfig
 from .tdmpc.configuration_tdmpc import TDMPCConfig as TDMPCConfig
 from .vqbet.configuration_vqbet import VQBeTConfig as VQBeTConfig
 from .smolvla2.configuration_smolvla2 import SmolVLA2Config as SmolVLA2Config
+from .smolvla3.configuration_smolvla3 import SmolVLA3Config as SmolVLA3Config
