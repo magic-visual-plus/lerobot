@@ -18,6 +18,7 @@ import time
 from contextlib import nullcontext
 from pprint import pformat
 from typing import Any
+import os
 
 import torch
 from termcolor import colored
@@ -103,6 +104,14 @@ def update_policy(
     train_metrics.grad_norm = grad_norm.item()
     train_metrics.lr = optimizer.param_groups[0]["lr"]
     train_metrics.update_s = time.perf_counter() - start_time
+
+    if "loss_action" in output_dict:
+        train_metrics.loss_action = output_dict["loss_action"]
+    if "loss_box" in output_dict:
+        train_metrics.loss_box = output_dict["loss_box"]
+    if "loss_depth" in output_dict:
+        train_metrics.loss_depth = output_dict["loss_depth"]
+        pass
     return train_metrics, output_dict
 
 
@@ -194,6 +203,9 @@ def train(cfg: TrainPipelineConfig):
         "lr": AverageMeter("lr", ":0.1e"),
         "update_s": AverageMeter("updt_s", ":.3f"),
         "dataloading_s": AverageMeter("data_s", ":.3f"),
+        "loss_action": AverageMeter("action", ":.3f"),
+        "loss_box": AverageMeter("box", ":.3f"),
+        "loss_depth": AverageMeter("depth", ":.3f"),
     }
 
     train_tracker = MetricsTracker(
@@ -220,7 +232,11 @@ def train(cfg: TrainPipelineConfig):
             lr_scheduler=lr_scheduler,
             use_amp=cfg.policy.use_amp,
         )
-
+        if "loss_action" in output_dict:
+            with open(os.path.join(cfg.output_dir, "loss.txt"), "a") as f:
+                f.write(f"{output_dict['loss_action']},{output_dict.get('loss_box', 0)},{output_dict.get('loss_depth', 0)}\n")
+                pass
+            pass
         # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we
         # increment `step` here.
         step += 1

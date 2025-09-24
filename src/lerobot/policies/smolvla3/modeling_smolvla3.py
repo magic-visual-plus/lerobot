@@ -60,6 +60,7 @@ from collections import deque
 import safetensors
 import torch
 import torch.nn.functional as F  # noqa: N812
+import torchvision.transforms.functional as TF
 from torch import Tensor, nn
 from transformers import AutoProcessor
 
@@ -75,6 +76,10 @@ from lerobot.policies.utils import (
     populate_queues,
 )
 from lerobot.utils.utils import get_safe_dtype
+
+import loguru
+
+logger = loguru.logger
 
 # Matches ".soNNN", optionally followed by "-something", up to the "_buffer_" marker
 _VARIANT_RE = re.compile(r"\.so\d+(?:-[\w]+)?_buffer_")
@@ -321,7 +326,7 @@ class SmolVLA3Policy(PreTrainedPolicy):
     """Wrapper class around VLAFlowMatching model to train and run inference within LeRobot."""
 
     config_class = SmolVLA3Config
-    name = "smolvla2"
+    name = "smolvla3"
 
     def __init__(
         self,
@@ -366,7 +371,7 @@ class SmolVLA3Policy(PreTrainedPolicy):
         map_location: str,
         strict: bool,
     ):
-        safetensors.torch.load_model(model, model_file, strict=strict, device=map_location)
+        safetensors.torch.load_model(model, model_file, strict=False, device=map_location)
         return load_smolvla(
             model,
             model_file,
@@ -391,7 +396,7 @@ class SmolVLA3Policy(PreTrainedPolicy):
         state = self.prepare_state(batch)
         lang_tokens, lang_masks = self.prepare_language(batch)
 
-        actions = self.model.sample_actions(images, img_masks, lang_tokens, lang_masks, state, noise=noise)
+        actions = self.model.sample_actions(images, img_masks, lang_tokens, lang_masks, state, noise=noise)[0]
 
         # Unpad actions
         original_action_dim = self.config.action_feature.shape[0]
@@ -457,23 +462,40 @@ class SmolVLA3Policy(PreTrainedPolicy):
         lang_tokens, lang_masks = self.prepare_language(batch)
         actions = self.prepare_action(batch)
         actions_is_pad = batch.get("actions_id_pad")
+
+        boxes, box_masks = self.prepare_box(batch)
+        depth_image = self.prepare_depth(batch)
+
         loss_dict = {}
-        losses = self.model.forward(images, img_masks, lang_tokens, lang_masks, state, actions, noise, time)
-        loss_dict["losses_after_forward"] = losses.clone()
+        loss_action, loss_box, loss_depth = self.model.forward(
+            images, img_masks, lang_tokens, lang_masks, state, actions, boxes, box_masks, depth_image)
+        loss_dict["losses_after_forward"] = loss_action.clone()
 
         if actions_is_pad is not None:
             in_episode_bound = ~actions_is_pad
-            losses = losses * in_episode_bound.unsqueeze(-1)
-            loss_dict["losses_after_in_ep_bound"] = losses.clone()
+            loss_action = loss_action * in_episode_bound.unsqueeze(-1)
+            loss_dict["losses_after_in_ep_bound"] = loss_action.clone()
 
         # Remove padding
-        losses = losses[:, :, : self.config.max_action_dim]
-        loss_dict["losses_after_rm_padding"] = losses.clone()
+        loss_action = loss_action[:, :, : self.config.max_action_dim]
+        loss_dict["losses_after_rm_padding"] = loss_action.clone()
+        loss_action = loss_action.mean()
+
+        loss_box = loss_box * box_masks.unsqueeze(-1)
+        loss_box = loss_box.reshape(loss_box.shape[0], -1).sum(dim=-1) / box_masks.sum(dim=-1)
+        loss_box = loss_box.mean()
+
+        loss_depth = loss_depth.mean()
 
         # For backward pass
-        loss = losses.mean()
+        loss = loss_action + loss_box + loss_depth
         # For backward pass
         loss_dict["loss"] = loss.item()
+        loss_dict["loss_action"] = loss_action.item()
+        loss_dict["loss_box"] = loss_box.item()
+        loss_dict["loss_depth"] = loss_depth.item()
+
+        # logger.info(f"loss_action: {loss_action.item()}, loss_box: {loss_box.item()}, loss_depth: {loss_depth.item()}")
         return loss, loss_dict
 
     def prepare_images(self, batch):
@@ -579,6 +601,24 @@ class SmolVLA3Policy(PreTrainedPolicy):
         """Pad action"""
         actions = pad_vector(batch[ACTION], self.config.max_action_dim)
         return actions
+    
+    def prepare_box(self, batch):
+        boxes = batch['bboxes']
+        max_num_boxes = self.config.max_num_embeddings_box
+        boxes_tensor = torch.zeros(
+            (boxes.shape[0], max_num_boxes, 4), device=boxes.device
+        )
+        boxes_tensor[:, : boxes.shape[1], :] = boxes[:, : max_num_boxes, -4:]
+        box_masks = torch.zeros(
+            (boxes.shape[0], max_num_boxes), device=boxes.device, dtype=torch.float32)
+        box_masks = boxes_tensor.sum(dim=-1) > 1e-8
+        return boxes_tensor, box_masks
+
+    def prepare_depth(self, batch):
+        depth_image = batch["observation.images.wrist_depth"]
+        depth_image = TF.resize(depth_image, self.config.depth_image_size)
+        depth_image = depth_image[:, :1, :, :]  # Keep only one channel if there are more
+        return depth_image
 
 
 def pad_tensor(tensor, max_len, pad_value=0):
@@ -621,30 +661,88 @@ class OutputProjectionMLP(nn.Module):
         x = self.output_linear(x + x_)
         return x
 
+
+class DepthImageEncoder(nn.Module):
+    def __init__(self, depth_image_size, hidden_size):
+        super().__init__()
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=4, padding=3)  # (B, 64, H/4, W/4)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.conv2 = nn.Conv2d(64, 256, kernel_size=7, stride=4, padding=3)  # (B, 128, H/16, W/16)
+        self.bn2 = nn.BatchNorm2d(256)
+        self.conv3 = nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1)  # (B, 256, H/32, W/32)
+        self.bn3 = nn.BatchNorm2d(512)
+
+        self.output_linear = nn.Linear(512, hidden_size)
+
+    def forward(self, depth_image):
+        x = self.conv1(depth_image)
+        x = self.bn1(x)
+        x = F.relu(x)
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = F.relu(x)
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = F.relu(x)
+
+        # x: (B, 512, H/32, W/32)
+        # make x flat: [B, 512, (H/32)*(W/32)]
+        b, c, h, w = x.shape
+        x = x.view(b, c, h * w)
+        x = x.permute(0, 2, 1)  # (B, (H/32)*(W/32), 512)
+        x = self.output_linear(x)  # (B, (H/32)*(W/32), hidden_size)
+        return x
+    
+
+class DepthImageDecoder(nn.Module):
+    def __init__(self, depth_image_size, hidden_size):
+        super().__init__()
+        self.input_linear = nn.Linear(hidden_size, 512)
+        self.deconv1 = nn.ConvTranspose2d(512, 256, kernel_size=3, stride=2, padding=1, output_padding=1)  # (B, 256, H/16, W/16)
+        self.bn1 = nn.BatchNorm2d(256)
+        self.deconv2 = nn.ConvTranspose2d(256, 64, kernel_size=7, stride=4, padding=3, output_padding=3)  # (B, 64, H/4, W/4)
+        self.bn2 = nn.BatchNorm2d(64)
+        self.deconv3 = nn.ConvTranspose2d(64, 1, kernel_size=7, stride=4, padding=3, output_padding=3)  # (B, 1, H, W)
+
+    def forward(self, x):
+        # x: (B, L, hidden_size)
+        b, l, d = x.shape
+        h_w = int(math.sqrt(l))
+        if h_w * h_w != l:
+            raise ValueError(f"Input length {l} is not a perfect square.")
+        
+        x = self.input_linear(x)  # (B, L, 512)
+        x = x.permute(0, 2, 1)  # (B, 512, L)
+        x = x.view(b, 512, h_w, h_w)  # (B, 512, H/32, W/32)
+
+        x = self.deconv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+        x = self.deconv2(x)
+        x = self.bn2(x)
+        x = F.relu(x)
+        x = self.deconv3(x)  # (B, 1, H, W)
+        return x
+
+class TimeEmbeddingMerger(nn.Module):
+    def __init__(self, hidden_dim):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(hidden_dim*2, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+
+    def forward(self, x, time_emb):
+        # x: (B, L, D)
+        # time_emb: (B, D)
+        time_emb = time_emb.unsqueeze(1).expand_as(x)  # (B, L, D)
+        x = torch.cat([x, time_emb], dim=-1)  # (B, L, 2*D)
+        x = self.mlp(x)  # (B, L, D)
+        return x
+    
 class VLAFlowMatching(nn.Module):
     """
-    SmolVLA
-
-    [Paper]()
-
-    Designed by Hugging Face.
-    ┌──────────────────────────────┐
-    │                 actions      │
-    │                    ▲         │
-    │ ┌─────────┐      ┌─|────┐    │
-    │ |         │────► │      │    │
-    │ |         │ kv   │      │    │
-    │ |         │────► │Action│    │
-    │ |   VLM   │cache │Expert│    |
-    │ │         │────► |      │    │
-    │ │         │      │      │    │
-    │ └▲──▲───▲─┘      └───▲──┘    |
-    │  │  |   |            │       |
-    │  |  |   |          noise     │
-    │  │  │ state                  │
-    │  │ language tokens           │
-    │  image(s)                    │
-    └──────────────────────────────┘
     """
 
     def __init__(self, config: SmolVLA3Config):
@@ -660,18 +758,29 @@ class VLAFlowMatching(nn.Module):
             self.config.max_state_dim, self.vlm.config.text_config.hidden_size
         )
         self.action_in_proj = nn.Linear(self.config.max_action_dim, self.vlm.config.text_config.hidden_size)
+        self.box_in_proj = nn.Linear(4, self.vlm.config.text_config.hidden_size)
+        self.depth_image_in_proj = DepthImageEncoder(
+            depth_image_size=self.config.depth_image_size,
+            hidden_size=self.vlm.config.text_config.hidden_size,
+        )
         self.action_out_proj = OutputProjectionMLP(
             input_dim=self.vlm.config.text_config.hidden_size,
             output_dim=self.config.max_action_dim,
             hidden_dim=self.vlm.config.text_config.hidden_size,
         )
+        self.box_out_proj = OutputProjectionMLP(
+            input_dim=self.vlm.config.text_config.hidden_size,
+            output_dim=4,
+            hidden_dim=self.vlm.config.text_config.hidden_size,
+        )
+        self.depth_image_out_proj = DepthImageDecoder(
+            depth_image_size=self.config.depth_image_size,
+            hidden_size=self.vlm.config.text_config.hidden_size,
+        )
 
-        self.action_time_mlp_in = nn.Linear(
-            self.vlm.config.text_config.hidden_size * 2, self.vlm.config.text_config.hidden_size
-        )
-        self.action_time_mlp_out = nn.Linear(
-            self.vlm.config.text_config.hidden_size, self.vlm.config.text_config.hidden_size
-        )
+        self.action_time_merger = TimeEmbeddingMerger(self.vlm.config.text_config.hidden_size)
+        self.box_time_merger = TimeEmbeddingMerger(self.vlm.config.text_config.hidden_size)
+        self.depth_image_time_merger = TimeEmbeddingMerger(self.vlm.config.text_config.hidden_size)
 
         self.set_requires_grad()
         self.fake_image_token = self.vlm.processor.tokenizer.fake_image_token_id
@@ -813,7 +922,7 @@ class VLAFlowMatching(nn.Module):
 
         return embs, pad_masks, position_ids
 
-    def embed_suffix(self, noisy_actions, timestep):
+    def embed_suffix(self, noisy_actions, noisy_boxes, noisy_depth, timestep):
         """Embed state, noisy_actions, timestep to prepare for Expert Gemma processing."""
         embs = []
         pad_masks = []
@@ -821,6 +930,9 @@ class VLAFlowMatching(nn.Module):
 
         # Fuse timestep + action information using an MLP
         action_emb = self.action_in_proj(noisy_actions)
+        box_emb = self.box_in_proj(noisy_boxes)
+        depth_emb = self.depth_image_in_proj(noisy_depth)
+
         device = action_emb.device
         bsize = action_emb.shape[0]
         dtype = action_emb.dtype
@@ -834,23 +946,35 @@ class VLAFlowMatching(nn.Module):
         )
         time_emb = time_emb.type(dtype=dtype)
 
-        time_emb = time_emb[:, None, :].expand_as(action_emb)
-        action_time_emb = torch.cat([action_emb, time_emb], dim=2)
-
-        action_time_emb = self.action_time_mlp_in(action_time_emb)
-        action_time_emb = F.silu(action_time_emb)  # swish == silu
-        action_time_emb = self.action_time_mlp_out(action_time_emb)
+        action_time_emb = self.action_time_merger(action_emb, time_emb)
+        box_time_emb = self.box_time_merger(box_emb, time_emb)
+        depth_time_emb = self.depth_image_time_merger(depth_emb, time_emb)
 
         # Add to input tokens
         embs.append(action_time_emb)
+        embs.append(box_time_emb)
+        embs.append(depth_time_emb)
 
-        bsize, action_time_dim = action_time_emb.shape[:2]
-        action_time_mask = torch.ones(bsize, action_time_dim, dtype=torch.bool, device=device)
-        pad_masks.append(action_time_mask)
+        bsize = action_time_emb.shape[0]
+        action_mask = torch.ones(bsize, action_time_emb.shape[1], dtype=torch.bool, device=device)
+        pad_masks.append(action_mask)
         start_position_id = self.config.max_image_text_length + self.config.max_state_dim
         position_ids.append(
-            torch.cumsum(action_time_mask.type(torch.long), dim=1) - 1 + start_position_id
+            torch.cumsum(action_mask.type(torch.long), dim=1) - 1 + start_position_id
         )
+        start_position_id += action_mask.shape[1]
+        box_mask = torch.ones(bsize, box_time_emb.shape[1], dtype=torch.bool, device=device)
+        pad_masks.append(box_mask)
+        position_ids.append(
+            torch.cumsum(box_mask.type(torch.long), dim=1) - 1 + start_position_id
+        )
+        start_position_id += box_mask.shape[1]
+        depth_mask = torch.ones(bsize, depth_time_emb.shape[1], dtype=torch.bool, device=device)
+        pad_masks.append(depth_mask)
+        position_ids.append(
+            torch.cumsum(depth_mask.type(torch.long), dim=1) - 1 + start_position_id
+        )
+        start_position_id += depth_mask.shape[1]
 
         # Set attention masks so that image, language and state inputs do not attend to action tokens
         embs = torch.cat(embs, dim=1)
@@ -860,38 +984,64 @@ class VLAFlowMatching(nn.Module):
         return embs, pad_masks, position_ids
 
     def forward(
-        self, images, img_masks, lang_tokens, lang_masks, state, actions, noise=None, time=None
+        self, images, img_masks, lang_tokens, lang_masks, state, actions, boxes, box_masks, depth_image,
     ) -> Tensor:
         """Do a full training forward pass and compute the loss (batch_size x num_steps x num_motors)"""
-        if noise is None:
-            noise = self.sample_noise(actions.shape, actions.device)
+        noise_action = self.sample_noise(actions.shape, actions.device)
+        noise_box = self.sample_noise((actions.shape[0], self.config.max_num_embeddings_box, 4), actions.device)
+        noise_depth = self.sample_noise(
+            (actions.shape[0], 1, self.config.depth_image_size, self.config.depth_image_size), actions.device)
 
-        if time is None:
-            time = self.sample_time(actions.shape[0], actions.device)
+        time = self.sample_time(actions.shape[0], actions.device)
 
         time_expanded = time[:, None, None]
-        x_t = time_expanded * noise + (1 - time_expanded) * actions
-        u_t = noise - actions
+        x_t_action = time_expanded * noise_action + (1 - time_expanded) * actions
+        u_t_action = noise_action - actions
+        x_t_box = time_expanded * noise_box + (1 - time_expanded) * boxes
+        u_t_box = noise_box - boxes
+        x_t_depth = time_expanded.unsqueeze(-1) * noise_depth + (1 - time_expanded.unsqueeze(-1)) * depth_image
+        u_t_depth = noise_depth - depth_image
+
+        num_action = self.config.chunk_size
+        num_box = self.config.max_num_embeddings_box
+        num_depth = self.config.max_num_embeddings_depth
+
         prefix_embs, prefix_pad_masks, prefix_position_ids = self.embed_prefix(
             images, img_masks, lang_tokens, lang_masks, state=state
         )
-        suffix_embs, suffix_pad_masks, suffix_position_ids = self.embed_suffix(x_t, time)
+        suffix_embs, suffix_pad_masks, suffix_position_ids = self.embed_suffix(
+            x_t_action,
+            x_t_box,
+            x_t_depth,
+            time)
         
-        suffix_out = self.vlm.forward_cross(
-            pad_mask_key=prefix_pad_masks,
-            position_ids_key=prefix_position_ids,
-            input_embeds_key=prefix_embs,
-            pad_mask_query=suffix_pad_masks,
-            position_ids_query=suffix_position_ids,
-            input_embeds_query=suffix_embs,
-        )
+        if True:
+        # with torch.no_grad():
+            suffix_out = self.vlm.forward_cross(
+                pad_mask_key=prefix_pad_masks,
+                position_ids_key=prefix_position_ids,
+                input_embeds_key=prefix_embs,
+                pad_mask_query=suffix_pad_masks,
+                position_ids_query=suffix_position_ids,
+                input_embeds_query=suffix_embs,
+            )
+            pass
 
-        suffix_out = suffix_out[:, -self.config.chunk_size :]
-        # Original openpi code, upcast attention output
         suffix_out = suffix_out.to(dtype=torch.float32)
-        v_t = self.action_out_proj(suffix_out)
-        losses = F.mse_loss(u_t, v_t, reduction="none")
-        return losses
+        action_out = suffix_out[:, :num_action, :]
+        box_out = suffix_out[:, num_action:num_action+num_box, :]
+        depth_out = suffix_out[:, num_action+num_box:, :]
+
+        v_t_action = self.action_out_proj(action_out)
+        v_t_box = self.box_out_proj(box_out)
+        v_t_depth = self.depth_image_out_proj(depth_out)
+
+        loss_action = F.mse_loss(u_t_action, v_t_action, reduction="none") * self.config.loss_weights["action"]
+        loss_box = F.mse_loss(u_t_box, v_t_box, reduction="none") * self.config.loss_weights["box"]
+        loss_depth = F.mse_loss(u_t_depth, v_t_depth, reduction="none") * self.config.loss_weights["depth"]
+        
+
+        return loss_action, loss_box, loss_depth
 
     def sample_actions(self, images, img_masks, lang_tokens, lang_masks, state, noise=None) -> Tensor:
         """Do a full inference forward and compute the action (batch_size x num_steps x num_motors)"""
@@ -900,7 +1050,14 @@ class VLAFlowMatching(nn.Module):
 
         if noise is None:
             actions_shape = (bsize, self.config.chunk_size, self.config.max_action_dim)
-            noise = self.sample_noise(actions_shape, device)
+            noise_action = self.sample_noise(actions_shape, device)
+        else:
+            noise_action = noise
+            pass
+        boxes_shape = (bsize, self.config.max_num_embeddings_box, 4)
+        noise_box = self.sample_noise(boxes_shape, device)
+        depth_shape = (bsize, 1, self.config.depth_image_size, self.config.depth_image_size)
+        noise_depth = self.sample_noise(depth_shape, device)
 
         prefix_embs, prefix_pad_masks, prefix_position_ids = self.embed_prefix(
             images, img_masks, lang_tokens, lang_masks, state=state
@@ -914,30 +1071,43 @@ class VLAFlowMatching(nn.Module):
         dt = -1.0 / self.config.num_steps
         dt = torch.tensor(dt, dtype=torch.float32, device=device)
 
-        x_t = noise
+        x_t_action = noise_action
+        x_t_box = noise_box
+        x_t_depth = noise_depth
+
         time = torch.tensor(1.0, dtype=torch.float32, device=device)
         while time >= -dt / 2:
             expanded_time = time.expand(bsize)
-            v_t = self.denoise_step(
+            v_t_action, v_t_box, v_t_depth = self.denoise_step(
                 prefix_pad_masks,
                 past_key_values,
-                x_t,
+                x_t_action,
+                x_t_box,
+                x_t_depth,
                 expanded_time,
             )
             # Euler step
-            x_t += dt * v_t
+            x_t_action = x_t_action + v_t_action * dt
+            x_t_box = x_t_box + v_t_box * dt
+            x_t_depth = x_t_depth + v_t_depth * dt
             time += dt
-        return x_t
+        return x_t_action, x_t_box, x_t_depth
 
     def denoise_step(
         self,
         prefix_pad_masks,
         past_key_values,
-        x_t,
+        x_t_action,
+        x_t_box,
+        x_t_depth,
         timestep,
     ):
         """Apply one denoising step of the noise `x_t` at a given timestep."""
-        suffix_embs, suffix_pad_masks, suffix_position_ids = self.embed_suffix(x_t, timestep)
+        suffix_embs, suffix_pad_masks, suffix_position_ids = self.embed_suffix(
+            x_t_action,
+            x_t_box,
+            x_t_depth,
+            timestep)
 
         attention_mask_cross = prefix_pad_masks[:, None, :] * suffix_pad_masks[:, :, None]
         attention_mask_self = suffix_pad_masks[:, None, :] * suffix_pad_masks[:, :, None]
@@ -950,7 +1120,14 @@ class VLAFlowMatching(nn.Module):
             use_cache=True,
         )
 
-        suffix_out = suffix_out[:, -self.config.chunk_size :]
         suffix_out = suffix_out.to(dtype=torch.float32)
-        v_t = self.action_out_proj(suffix_out)
-        return v_t
+        num_action = self.config.chunk_size
+        num_box = self.config.max_num_embeddings_box
+        num_depth = self.config.max_num_embeddings_depth
+        action_out = suffix_out[:, :num_action, :]
+        box_out = suffix_out[:, num_action:num_action+num_box, :]
+        depth_out = suffix_out[:, num_action+num_box:, :]
+        v_t_action = self.action_out_proj(action_out)
+        v_t_box = self.box_out_proj(box_out)
+        v_t_depth = self.depth_image_out_proj(depth_out)
+        return v_t_action, v_t_box, v_t_depth

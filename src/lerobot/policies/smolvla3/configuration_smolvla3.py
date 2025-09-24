@@ -33,14 +33,27 @@ class SmolVLA3Config(PreTrainedConfig):
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
             "VISUAL": NormalizationMode.IDENTITY,
+            "ENV": NormalizationMode.IDENTITY,
             "STATE": NormalizationMode.MEAN_STD,
             "ACTION": NormalizationMode.MEAN_STD,
         }
     )
 
+    loss_weights: dict[str, float] = field(
+        default_factory=lambda: {
+            "action": 1.0,
+            "box": 0.0,
+            "depth": 0.0,
+        }
+    )
     # Shorter state and action vectors will be padded
     max_state_dim: int = 32
     max_action_dim: int = 32
+
+    depth_image_size: int = 256
+
+    max_num_embeddings_depth: int = 64
+    max_num_embeddings_box: int = 10
 
     # Image preprocessing
     resize_imgs_with_padding: tuple[int, int] = (512, 512)
