@@ -976,13 +976,53 @@ class VLAFlowMatching(nn.Module):
         )
         start_position_id += depth_mask.shape[1]
 
-        # Set attention masks so that image, language and state inputs do not attend to action tokens
-        embs = torch.cat(embs, dim=1)
-        pad_masks = torch.cat(pad_masks, dim=1)
-        position_ids = torch.cat(position_ids, dim=1)
 
         return embs, pad_masks, position_ids
 
+    def forward_suffix(
+            self, past_key_values, prefix_pad_masks,
+            suffix_embs, suffix_pad_masks, suffix_position_ids,
+    ):
+        num_action = suffix_embs[0].shape[1]
+        num_box = suffix_embs[1].shape[1]
+
+        suffix_embs = torch.cat(suffix_embs, dim=1)
+        attention_mask_self = torch.zeros(
+            (suffix_embs.shape[0], suffix_embs.shape[1], suffix_embs.shape[1]),
+            dtype=suffix_pad_masks[0].dtype,
+            device=suffix_embs.device,
+        )
+        pad_mask_start_idx = 0
+        for suffix_pad_mask in suffix_pad_masks:
+            smask = suffix_pad_mask[:, None, :] * suffix_pad_mask[:, :, None]
+            snum = suffix_pad_mask.shape[1]
+
+            attention_mask_self[
+                :, pad_mask_start_idx:pad_mask_start_idx+snum, pad_mask_start_idx:pad_mask_start_idx+snum] = \
+                    smask
+            pad_mask_start_idx += snum
+            pass
+        # make diagonal blocks
+        suffix_position_ids = torch.cat(suffix_position_ids, dim=1)
+        all_suffix_pad_mask = torch.cat(suffix_pad_masks, dim=1)
+        attention_mask_cross = prefix_pad_masks[:, None, :] * all_suffix_pad_mask[:, :, None]
+
+        suffix_outs = self.vlm.forward(
+            attention_mask_cross=attention_mask_cross,
+            attention_mask_self=attention_mask_self,
+            position_ids=suffix_position_ids,
+            inputs_embeds=suffix_embs,
+            past_key_values=past_key_values,
+            use_cache=True,
+        )
+        
+        action_out = suffix_outs[:, :num_action, :]
+        box_out = suffix_outs[:, num_action:num_action+num_box, :]
+        depth_out = suffix_outs[:, num_action+num_box:, :]
+
+        return action_out, box_out, depth_out
+       
+        
     def forward(
         self, images, img_masks, lang_tokens, lang_masks, state, actions, boxes, box_masks, depth_image,
     ) -> Tensor:
@@ -1002,10 +1042,6 @@ class VLAFlowMatching(nn.Module):
         x_t_depth = time_expanded.unsqueeze(-1) * noise_depth + (1 - time_expanded.unsqueeze(-1)) * depth_image
         u_t_depth = noise_depth - depth_image
 
-        num_action = self.config.chunk_size
-        num_box = self.config.max_num_embeddings_box
-        num_depth = self.config.max_num_embeddings_depth
-
         prefix_embs, prefix_pad_masks, prefix_position_ids = self.embed_prefix(
             images, img_masks, lang_tokens, lang_masks, state=state
         )
@@ -1015,22 +1051,16 @@ class VLAFlowMatching(nn.Module):
             x_t_depth,
             time)
         
-        if True:
-        # with torch.no_grad():
-            suffix_out = self.vlm.forward_cross(
-                pad_mask_key=prefix_pad_masks,
-                position_ids_key=prefix_position_ids,
-                input_embeds_key=prefix_embs,
-                pad_mask_query=suffix_pad_masks,
-                position_ids_query=suffix_position_ids,
-                input_embeds_query=suffix_embs,
-            )
-            pass
+        past_key_values = self.vlm.prepare_for_generation(
+            attention_mask=prefix_pad_masks,
+            position_ids=prefix_position_ids,
+            inputs_embeds=prefix_embs,
+        )
 
-        suffix_out = suffix_out.to(dtype=torch.float32)
-        action_out = suffix_out[:, :num_action, :]
-        box_out = suffix_out[:, num_action:num_action+num_box, :]
-        depth_out = suffix_out[:, num_action+num_box:, :]
+        action_out, box_out, depth_out = self.forward_suffix(
+            past_key_values, prefix_pad_masks,
+            suffix_embs, suffix_pad_masks, suffix_position_ids,
+        )
 
         v_t_action = self.action_out_proj(action_out)
         v_t_box = self.box_out_proj(box_out)
@@ -1109,24 +1139,11 @@ class VLAFlowMatching(nn.Module):
             x_t_depth,
             timestep)
 
-        attention_mask_cross = prefix_pad_masks[:, None, :] * suffix_pad_masks[:, :, None]
-        attention_mask_self = suffix_pad_masks[:, None, :] * suffix_pad_masks[:, :, None]
-        suffix_out = self.vlm.forward(
-            attention_mask_cross=attention_mask_cross,
-            attention_mask_self=attention_mask_self,
-            position_ids=suffix_position_ids,
-            inputs_embeds=suffix_embs,
-            past_key_values=past_key_values,
-            use_cache=True,
+        action_out, box_out, depth_out = self.forward_suffix(
+            past_key_values, prefix_pad_masks,
+            suffix_embs, suffix_pad_masks, suffix_position_ids,
         )
 
-        suffix_out = suffix_out.to(dtype=torch.float32)
-        num_action = self.config.chunk_size
-        num_box = self.config.max_num_embeddings_box
-        num_depth = self.config.max_num_embeddings_depth
-        action_out = suffix_out[:, :num_action, :]
-        box_out = suffix_out[:, num_action:num_action+num_box, :]
-        depth_out = suffix_out[:, num_action+num_box:, :]
         v_t_action = self.action_out_proj(action_out)
         v_t_box = self.box_out_proj(box_out)
         v_t_depth = self.depth_image_out_proj(depth_out)

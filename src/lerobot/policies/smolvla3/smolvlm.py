@@ -246,6 +246,6 @@ class SmolVLM(nn.Module):
             use_cache=use_cache,
         )
 
-        return outputs.last_hidden_state
+        return outputs.last_hidden_state.to(torch.float32)
                 
     pass

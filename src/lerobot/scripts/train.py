@@ -233,7 +233,10 @@ def train(cfg: TrainPipelineConfig):
             use_amp=cfg.policy.use_amp,
         )
         if "loss_action" in output_dict:
-            with open(os.path.join(cfg.output_dir, "loss.txt"), "a") as f:
+            if not os.path.exists(cfg.output_dir):
+                os.makedirs(cfg.output_dir)
+                pass
+            with open(os.path.join(cfg.output_dir, "loss.txt"), "a+") as f:
                 f.write(f"{output_dict['loss_action']},{output_dict.get('loss_box', 0)},{output_dict.get('loss_depth', 0)}\n")
                 pass
             pass
