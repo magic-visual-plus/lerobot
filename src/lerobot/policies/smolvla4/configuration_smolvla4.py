@@ -92,7 +92,7 @@ class SmolVLA4Config(PreTrainedConfig):
     optimizer_grad_clip_norm: float = 10
 
     scheduler_warmup_steps: int = 1_000
-    scheduler_decay_steps: int = 100_000
+    scheduler_decay_steps: int = 40_000
     scheduler_decay_lr: float = 1e-6
 
     vlm_model_name: str = "HuggingFaceTB/SmolVLM2-256M-Video-Instruct"  # Select the VLM backbone.

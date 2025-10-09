@@ -366,7 +366,7 @@ class SmolVLA4Policy(PreTrainedPolicy):
     @classmethod
     def _load_as_safetensor(
         cls,
-        model: "SmolVLA3Policy",
+        model: "SmolVLA4Policy",
         model_file: str,
         map_location: str,
         strict: bool,
@@ -756,6 +756,11 @@ class VLAFlowMatching(nn.Module):
             self.config.max_state_dim, self.vlm.config.text_config.hidden_size
         )
         self.action_in_proj = nn.Linear(self.config.max_action_dim, self.vlm.config.text_config.hidden_size)
+        self.action_in_emb = nn.Parameter(
+            torch.zeros(1, self.config.chunk_size, self.vlm.config.text_config.hidden_size),
+        )
+        nn.init.normal_(self.action_in_emb, std=0.02)
+
         self.box_in_emb = nn.Parameter(
             torch.zeros(1, self.config.max_num_embeddings_box, self.vlm.config.text_config.hidden_size)
         )
@@ -983,6 +988,36 @@ class VLAFlowMatching(nn.Module):
 
         return embs, pad_masks, position_ids
 
+    def embed_suffix_autoregressive(self, batch_size):
+        """Embed state, noisy_actions, timestep to prepare for Expert Gemma processing."""
+        embs = []
+        pad_masks = []
+        position_ids = []
+
+        action_emb = self.action_in_emb.expand(
+            batch_size, -1, -1
+        )
+
+        device = action_emb.device
+        bsize = action_emb.shape[0]
+
+        # Add to input tokens
+        embs.append(action_emb)
+
+        bsize = action_emb.shape[0]
+        action_mask = torch.ones(bsize, action_emb.shape[1], dtype=torch.bool, device=device)
+        pad_masks.append(action_mask)
+        start_position_id = self.config.max_image_text_length + self.config.max_state_dim + \
+            self.config.max_num_embeddings_box + self.config.max_num_embeddings_depth
+        position_ids.append(
+            torch.cumsum(action_mask.type(torch.long), dim=1) - 1 + start_position_id
+        )
+        embs = torch.cat(embs, dim=1)
+        pad_masks = torch.cat(pad_masks, dim=1)
+        position_ids = torch.cat(position_ids, dim=1)
+
+        return embs, pad_masks, position_ids
+
     def forward_suffix(
             self, past_key_values, prefix_pad_masks,
             suffix_embs, suffix_pad_masks, suffix_position_ids,
@@ -1006,20 +1041,26 @@ class VLAFlowMatching(nn.Module):
         self, images, img_masks, lang_tokens, lang_masks, state, actions, boxes, box_masks, depth_image,
     ) -> Tensor:
         """Do a full training forward pass and compute the loss (batch_size x num_steps x num_motors)"""
-        noise_action = self.sample_noise(actions.shape, actions.device)
-
-        time = self.sample_time(actions.shape[0], actions.device)
-
-        time_expanded = time[:, None, None]
-        x_t = time_expanded * noise_action + (1 - time_expanded) * actions
-        u_t = noise_action - actions
 
         prefix_embs, prefix_pad_masks, prefix_position_ids, box_range, depth_range = self.embed_prefix(
             images, img_masks, lang_tokens, lang_masks, state=state
         )
-        suffix_embs, suffix_pad_masks, suffix_position_ids = self.embed_suffix(
-            x_t,
-            time)
+
+        if self.config.num_steps > 0:
+            # flow matching
+            noise_action = self.sample_noise(actions.shape, actions.device)
+            time = self.sample_time(actions.shape[0], actions.device)
+            time_expanded = time[:, None, None]
+            x_t = time_expanded * noise_action + (1 - time_expanded) * actions
+            u_t = noise_action - actions
+            suffix_embs, suffix_pad_masks, suffix_position_ids = self.embed_suffix(
+                x_t,
+                time)
+        else:
+            # auto-regressive
+            suffix_embs, suffix_pad_masks, suffix_position_ids = self.embed_suffix_autoregressive(actions.shape[0])
+            u_t = actions
+            pass
         
         if True:
         # with torch.no_grad():
@@ -1055,13 +1096,6 @@ class VLAFlowMatching(nn.Module):
         bsize = state.shape[0]
         device = state.device
 
-        if noise is None:
-            actions_shape = (bsize, self.config.chunk_size, self.config.max_action_dim)
-            noise_action = self.sample_noise(actions_shape, device)
-        else:
-            noise_action = noise
-            pass
-
         prefix_embs, prefix_pad_masks, prefix_position_ids, box_range, depth_range = self.embed_prefix(
             images, img_masks, lang_tokens, lang_masks, state=state
         )
@@ -1077,23 +1111,43 @@ class VLAFlowMatching(nn.Module):
         box_pred = self.box_out_proj(box_emb)
         depth_pred = self.depth_image_out_proj(depth_emb)
 
-        dt = -1.0 / self.config.num_steps
-        dt = torch.tensor(dt, dtype=torch.float32, device=device)
+        if self.config.num_steps > 0:
+            if noise is None:
+                actions_shape = (bsize, self.config.chunk_size, self.config.max_action_dim)
+                noise_action = self.sample_noise(actions_shape, device)
+            else:
+                noise_action = noise
+                pass
+            dt = -1.0 / self.config.num_steps
+            dt = torch.tensor(dt, dtype=torch.float32, device=device)
+            x_t = noise_action
 
-        x_t = noise_action
-
-        time = torch.tensor(1.0, dtype=torch.float32, device=device)
-        while time >= -dt / 2:
-            expanded_time = time.expand(bsize)
-            v_t = self.denoise_step(
+            time = torch.tensor(1.0, dtype=torch.float32, device=device)
+            while time >= -dt / 2:
+                expanded_time = time.expand(bsize)
+                v_t = self.denoise_step(
+                    prefix_pad_masks,
+                    past_key_values,
+                    x_t,
+                    expanded_time,
+                )
+                # Euler step
+                x_t = x_t + v_t * dt
+                time += dt
+                pass
+            pass
+        else:
+            x_t = self.action_in_emb.expand(
+                bsize, -1, -1
+            )
+            x_t = self.denoise_step(
                 prefix_pad_masks,
                 past_key_values,
                 x_t,
-                expanded_time,
+                None,
             )
-            # Euler step
-            x_t = x_t + v_t * dt
-            time += dt
+            pass
+        
         return x_t, box_pred, depth_pred
 
     def denoise_step(
@@ -1104,9 +1158,13 @@ class VLAFlowMatching(nn.Module):
         timestep,
     ):
         """Apply one denoising step of the noise `x_t` at a given timestep."""
-        suffix_embs, suffix_pad_masks, suffix_position_ids = self.embed_suffix(
-            x_t,
-            timestep)
+        if self.config.num_steps > 0:
+            suffix_embs, suffix_pad_masks, suffix_position_ids = self.embed_suffix(
+                x_t,
+                timestep)
+        else:
+            suffix_embs, suffix_pad_masks, suffix_position_ids = self.embed_suffix_autoregressive(x_t.shape[0])
+            pass
 
         action_out = self.forward_suffix(
             past_key_values, prefix_pad_masks,
@@ -1115,3 +1173,4 @@ class VLAFlowMatching(nn.Module):
 
         v_t_action = self.action_out_proj(action_out)
         return v_t_action
+    
