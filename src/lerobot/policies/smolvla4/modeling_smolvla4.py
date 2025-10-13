@@ -396,8 +396,10 @@ class SmolVLA4Policy(PreTrainedPolicy):
         state = self.prepare_state(batch)
         lang_tokens, lang_masks = self.prepare_language(batch)
 
-        actions = self.model.sample_actions(images, img_masks, lang_tokens, lang_masks, state, noise=noise)[0]
-
+        actions = self.model.sample_actions(images, img_masks, lang_tokens, lang_masks, state, noise=noise)
+        # unpack to actions and boxes
+        actions, boxes, depth_image = actions
+        
         # Unpad actions
         original_action_dim = self.config.action_feature.shape[0]
         actions = actions[:, :, :original_action_dim]
@@ -407,7 +409,7 @@ class SmolVLA4Policy(PreTrainedPolicy):
         if self.config.adapt_to_pi_aloha:
             actions = self._pi_aloha_encode_actions(actions)
 
-        return actions
+        return actions, boxes, depth_image
 
     def _prepare_batch(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
         if self.config.adapt_to_pi_aloha:
@@ -428,7 +430,7 @@ class SmolVLA4Policy(PreTrainedPolicy):
         return actions
 
     @torch.no_grad()
-    def select_action(self, batch: dict[str, Tensor], noise: Tensor | None = None) -> Tensor:
+    def select_action(self, batch: dict[str, Tensor], noise: Tensor | None = None, need_bbox = False) -> Tensor:
         """Select a single action given environment observations.
 
         This method wraps `select_actions` in order to return one action at a time for execution in the
@@ -443,12 +445,24 @@ class SmolVLA4Policy(PreTrainedPolicy):
         # querying the policy.
         if len(self._queues[ACTION]) == 0:
             actions = self._get_action_chunk(batch, noise)
+            actions, boxes, depth_image = actions
 
             # `self.predict_action_chunk` returns a (batch_size, n_action_steps, action_dim) tensor, but the queue
             # effectively has shape (n_action_steps, batch_size, *), hence the transpose.
             self._queues[ACTION].extend(actions.transpose(0, 1)[: self.config.n_action_steps])
-
-        return self._queues[ACTION].popleft()
+        else:
+            if need_bbox:
+                actions = self._get_action_chunk(batch, noise)
+                actions, boxes, depth_image = actions
+        # import ipdb; ipdb.set_trace()
+        if need_bbox:
+            return {
+                "action": self._queues[ACTION].popleft(),
+                "box": boxes,
+                "depth_image": depth_image,
+            }
+        else:
+            return self._queues[ACTION].popleft()
 
     def forward(self, batch: dict[str, Tensor], noise=None, time=None) -> dict[str, Tensor]:
         """Do a full training forward pass to compute the loss"""
