@@ -100,7 +100,7 @@ class SmolVLA4Config(PreTrainedConfig):
 
     add_image_special_tokens: bool = True  # Whether to use special image tokens around image features.
 
-    attention_mode: str = "cross_attn"
+    attention_mode: str = "custom"
 
     prefix_length: int = -1
     max_image_text_length: int = 1024

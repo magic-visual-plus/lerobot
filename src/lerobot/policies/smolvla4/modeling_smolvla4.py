@@ -496,7 +496,7 @@ class SmolVLA4Policy(PreTrainedPolicy):
         loss_action = loss_action.mean()
 
         loss_box = loss_box * box_masks.unsqueeze(-1)
-        loss_box = loss_box.reshape(loss_box.shape[0], -1).sum(dim=-1) / box_masks.sum(dim=-1)
+        loss_box = loss_box.reshape(loss_box.shape[0], -1).sum(dim=-1) / (box_masks.sum(dim=-1) + 1e-8)
         loss_box = loss_box.mean()
 
         loss_depth = loss_depth.mean()
@@ -617,20 +617,33 @@ class SmolVLA4Policy(PreTrainedPolicy):
         return actions
     
     def prepare_box(self, batch):
-        boxes = batch['bboxes']
-        max_num_boxes = self.config.max_num_embeddings_box
-        boxes_tensor = torch.zeros(
-            (boxes.shape[0], max_num_boxes, 4), device=boxes.device
-        )
-        boxes_tensor[:, : boxes.shape[1], :] = boxes[:, : max_num_boxes, -4:]
-        box_masks = boxes_tensor.sum(dim=-1) > 1e-8
-        return boxes_tensor, box_masks
+        if "bboxes" in batch:
+            boxes = batch['bboxes']
+            max_num_boxes = self.config.max_num_embeddings_box
+            boxes_tensor = torch.zeros(
+                (boxes.shape[0], max_num_boxes, 4), device=boxes.device
+            )
+            boxes_tensor[:, : boxes.shape[1], :] = boxes[:, : max_num_boxes, -4:]
+            box_masks = boxes_tensor.sum(dim=-1) > 1e-8
+            return boxes_tensor, box_masks
+        else:
+            bsize = batch[OBS_STATE].shape[0]
+            device = batch[OBS_STATE].device
+            boxes_tensor = torch.zeros((bsize, self.config.max_num_embeddings_box, 4), device=device)
+            box_masks = torch.zeros((bsize, self.config.max_num_embeddings_box), dtype=torch.bool, device=device)
+            return boxes_tensor, box_masks
 
     def prepare_depth(self, batch):
-        depth_image = batch["observation.images.wrist_depth"]
-        depth_image = TF.resize(depth_image, self.config.depth_image_size)
-        depth_image = depth_image[:, :1, :, :]  # Keep only one channel if there are more
-        return depth_image
+        if "observation.images.wrist_depth" in batch:
+            depth_image = batch["observation.images.wrist_depth"]
+            depth_image = TF.resize(depth_image, self.config.depth_image_size)
+            depth_image = depth_image[:, :1, :, :]  # Keep only one channel if there are more
+            return depth_image
+        else:
+            bsize = batch[OBS_STATE].shape[0]
+            device = batch[OBS_STATE].device
+            depth_image = torch.zeros((bsize, 1, self.config.depth_image_size, self.config.depth_image_size), device=device)
+            return depth_image
 
 
 def pad_tensor(tensor, max_len, pad_value=0):
@@ -900,6 +913,8 @@ class VLAFlowMatching(nn.Module):
                 )
                 current_position += image_end_mask.shape[1]
                 pass
+            pass
+        img_range = (0, sum([e.shape[1] for e in embs]))
         lang_emb = self.vlm.embed_language_tokens(lang_tokens)
         # Normalize language embeddings
         lang_emb_dim = lang_emb.shape[-1]
@@ -910,6 +925,7 @@ class VLAFlowMatching(nn.Module):
         position_ids.append(
             torch.cumsum(lang_masks.type(torch.long), dim=1) - 1 + current_position
         )
+        lang_range = (sum([e.shape[1] for e in embs]) - lang_emb.shape[1], sum([e.shape[1] for e in embs]))
 
         # restart position for states
         current_position = self.config.max_image_text_length
@@ -926,6 +942,7 @@ class VLAFlowMatching(nn.Module):
         position_ids.append(
             torch.cumsum(state_mask.type(torch.long), dim=1) - 1 + current_position
         )
+        state_range = (sum([e.shape[1] for e in embs]) - state_emb.shape[1], sum([e.shape[1] for e in embs]))
         current_position += state_mask.shape[1]
 
         box_emb = self.box_in_emb.expand(bsize, -1, -1)
@@ -959,7 +976,7 @@ class VLAFlowMatching(nn.Module):
             position_ids = pad_tensor(position_ids, self.prefix_length, pad_value=0)
             pass
 
-        return embs, pad_masks, position_ids, box_range, depth_range
+        return embs, pad_masks, position_ids, [img_range, lang_range, state_range, box_range, depth_range]
 
     def embed_suffix(self, noisy_actions, timestep):
         """Embed state, noisy_actions, timestep to prepare for Expert Gemma processing."""
@@ -1033,11 +1050,11 @@ class VLAFlowMatching(nn.Module):
         return embs, pad_masks, position_ids
 
     def forward_suffix(
-            self, past_key_values, prefix_pad_masks,
-            suffix_embs, suffix_pad_masks, suffix_position_ids,
+            self, past_key_values, attention_mask_cross,
+            suffix_embs, attention_mask_suffix, suffix_position_ids,
     ):
-        attention_mask_cross = prefix_pad_masks[:, None, :] * suffix_pad_masks[:, :, None]
-        attention_mask_self = suffix_pad_masks[:, None, :] * suffix_pad_masks[:, :, None]
+        attention_mask_cross = attention_mask_cross
+        attention_mask_self = attention_mask_suffix
 
         suffix_outs = self.vlm.forward(
             attention_mask_cross=attention_mask_cross,
@@ -1050,15 +1067,76 @@ class VLAFlowMatching(nn.Module):
 
         return suffix_outs
        
+    def generate_attention_matrix(
+            self, prefix_pad_masks, suffix_pad_masks, img_range, lang_range, state_range, box_range, depth_range):
+        bsize = prefix_pad_masks.shape[0]
+        prefix_len = prefix_pad_masks.shape[1]
+
+        attention_matrix_prefix = torch.zeros(
+            (bsize, prefix_len, prefix_len),
+            dtype=torch.bool,
+            device=prefix_pad_masks.device,
+        )
+
+        if suffix_pad_masks is not None:
+            suffix_len = suffix_pad_masks.shape[1]
+            attention_matrix_cross = torch.zeros(
+                (bsize, suffix_len, prefix_len),
+                dtype=torch.bool,
+                device=prefix_pad_masks.device,
+            )
+            attention_matrix_suffix = torch.zeros(
+                (bsize, suffix_len, suffix_len),
+                dtype=torch.bool,
+                device=prefix_pad_masks.device,
+            )        
         
+        if self.config.attention_mode == "custom":
+            # for image attention
+            attention_matrix_prefix[:, img_range[0]:img_range[1], img_range[0]:img_range[1]] = True
+            attention_matrix_prefix[:, img_range[0]:img_range[1], lang_range[0]:lang_range[1]] = True
+            attention_matrix_prefix[:, lang_range[0]:lang_range[1], img_range[0]:img_range[1]] = True
+            attention_matrix_prefix[:, lang_range[0]:lang_range[1], lang_range[0]:lang_range[1]] = True
+            # for state attention
+            attention_matrix_prefix[:, state_range[0]:state_range[1], img_range[0]:img_range[1]] = True
+            attention_matrix_prefix[:, state_range[0]:state_range[1], state_range[0]:state_range[1]] = True
+            # for box attention
+            attention_matrix_prefix[:, box_range[0]:box_range[1], img_range[0]:img_range[1]] = True
+            attention_matrix_prefix[:, box_range[0]:box_range[1], lang_range[0]:lang_range[1]] = True
+            attention_matrix_prefix[:, box_range[0]:box_range[1], box_range[0]:box_range[1]] = True
+            # for depth attention
+            attention_matrix_prefix[:, depth_range[0]:depth_range[1], img_range[0]:img_range[1]] = True
+            attention_matrix_prefix[:, depth_range[0]:depth_range[1], lang_range[0]:lang_range[1]] = True
+            attention_matrix_prefix[:, depth_range[0]:depth_range[1], depth_range[0]:depth_range[1]] = True
+        else:
+            # full attention within prefix
+            attention_matrix_prefix[:, :, :] = True
+            pass
+        
+        if suffix_pad_masks is not None:
+            # cross attention: suffix can attend to all prefix tokens
+            attention_matrix_cross[:, :, :] = True
+
+            # suffix attention: full attention within suffix
+            attention_matrix_suffix[:, :, :] = True
+        else:
+            attention_matrix_cross = None
+            attention_matrix_suffix = None
+            pass
+
+        return attention_matrix_prefix, attention_matrix_cross, attention_matrix_suffix
+
+
     def forward(
         self, images, img_masks, lang_tokens, lang_masks, state, actions, boxes, box_masks, depth_image,
     ) -> Tensor:
         """Do a full training forward pass and compute the loss (batch_size x num_steps x num_motors)"""
 
-        prefix_embs, prefix_pad_masks, prefix_position_ids, box_range, depth_range = self.embed_prefix(
+        prefix_embs, prefix_pad_masks, prefix_position_ids, ranges = self.embed_prefix(
             images, img_masks, lang_tokens, lang_masks, state=state
         )
+
+        img_range, lang_range, state_range, box_range, depth_range = ranges
 
         if self.config.num_steps > 0:
             # flow matching
@@ -1076,17 +1154,21 @@ class VLAFlowMatching(nn.Module):
             u_t = actions
             pass
         
+        attention_matrix_prefix, attention_matrix_cross, attention_matrix_suffix = self.generate_attention_matrix(
+            prefix_pad_masks, suffix_pad_masks, img_range, lang_range, state_range, box_range, depth_range
+        )
+
         if True:
         # with torch.no_grad():
             past_key_values, prefix_out = self.vlm.prepare_for_generation(
-                attention_mask=prefix_pad_masks,
+                attention_mask=attention_matrix_prefix,
                 position_ids=prefix_position_ids,
                 inputs_embeds=prefix_embs,
             )
 
             action_out = self.forward_suffix(
-                past_key_values, prefix_pad_masks,
-                suffix_embs, suffix_pad_masks, suffix_position_ids,
+                past_key_values, attention_matrix_cross,
+                suffix_embs, attention_matrix_suffix, suffix_position_ids,
             )
             pass
 
@@ -1105,20 +1187,31 @@ class VLAFlowMatching(nn.Module):
 
         return loss_action, loss_box, loss_depth
 
+    def generate_temp_action(self, bsize, device):
+        temp_action = torch.zeros((bsize, self.config.chunk_size, self.config.max_action_dim), device=device)
+        return temp_action
+
     def sample_actions(self, images, img_masks, lang_tokens, lang_masks, state, noise=None) -> Tensor:
         """Do a full inference forward and compute the action (batch_size x num_steps x num_motors)"""
         bsize = state.shape[0]
         device = state.device
 
-        prefix_embs, prefix_pad_masks, prefix_position_ids, box_range, depth_range = self.embed_prefix(
+        prefix_embs, prefix_pad_masks, prefix_position_ids, ranges = self.embed_prefix(
             images, img_masks, lang_tokens, lang_masks, state=state
+        )
+        img_range, lang_range, state_range, box_range, depth_range = ranges
+
+        _, suffix_pad_masks, _ = self.embed_suffix_autoregressive(bsize)
+        attention_matrix_prefix, attention_matrix_cross, attention_matrix_suffix = self.generate_attention_matrix(
+            prefix_pad_masks, suffix_pad_masks, img_range, lang_range, state_range, box_range, depth_range
         )
 
         past_key_values, prefix_embs = self.vlm.prepare_for_generation(
-            attention_mask=prefix_pad_masks,
+            attention_mask=attention_matrix_prefix,
             position_ids=prefix_position_ids,
             inputs_embeds=prefix_embs,
         )
+
         box_emb = prefix_embs[:, box_range[0]:box_range[1], :]  # (B, num_box, D)
         depth_emb = prefix_embs[:, depth_range[0]:depth_range[1], :]
 
@@ -1140,7 +1233,8 @@ class VLAFlowMatching(nn.Module):
             while time >= -dt / 2:
                 expanded_time = time.expand(bsize)
                 v_t = self.denoise_step(
-                    prefix_pad_masks,
+                    attention_matrix_cross,
+                    attention_matrix_suffix,
                     past_key_values,
                     x_t,
                     expanded_time,
@@ -1155,7 +1249,8 @@ class VLAFlowMatching(nn.Module):
                 bsize, -1, -1
             )
             x_t = self.denoise_step(
-                prefix_pad_masks,
+                attention_matrix_cross,
+                attention_matrix_suffix,
                 past_key_values,
                 x_t,
                 None,
@@ -1166,7 +1261,8 @@ class VLAFlowMatching(nn.Module):
 
     def denoise_step(
         self,
-        prefix_pad_masks,
+        attention_matrix_cross,
+        attention_matrix_suffix,
         past_key_values,
         x_t,
         timestep,
@@ -1181,8 +1277,8 @@ class VLAFlowMatching(nn.Module):
             pass
 
         action_out = self.forward_suffix(
-            past_key_values, prefix_pad_masks,
-            suffix_embs, suffix_pad_masks, suffix_position_ids,
+            past_key_values, attention_matrix_cross,
+            suffix_embs, attention_matrix_suffix, suffix_position_ids,
         )
 
         v_t_action = self.action_out_proj(action_out)
