@@ -38,10 +38,10 @@ LIBERO_ENV_RESOLUTION = 256  # resolution used to render training data
 
 # NEED_RAND_POS = True
 NEED_RAND_POS = False
-NEED_BBOX = False
+NEED_BBOX = True
 NEED_RAND_CAM = False
 
-DISABLE_STATE = False
+DISABLE_STATE = True
 DISABLE_IMAGE = False
 DISABLE_WRIST_IMAGE = False
 DISABLE_PROMPT = False
@@ -278,10 +278,14 @@ def eval_libero(args: Args) -> None:
                             obs["robot0_gripper_qpos"],
                         )
                     )
-                    print(f"state {state}")
+                    
                     if DISABLE_STATE:
                         # disable state to zeros
-                        state = np.zeros_like(state)
+                        # state = np.zeros_like(state)
+                        # fix state most right 
+                        state = np.array([-0.06813535, -0.19478797,  1.16284806,  3.099479,   -0.01742949, -0.80769123, 0.01611037, -0.03959287])
+                        # fix state most left
+                        state = np.array([-1.68719120e-03,  2.43636704e-01,  1.02261244e+00, 3.099479,   -0.01742949, -0.80769123, 0.01611037, -0.03959287])
 
                     if DISABLE_IMAGE:
                         agentview_image = np.zeros_like(agentview_image)
@@ -339,6 +343,7 @@ def eval_libero(args: Args) -> None:
 
                     # Execute action in environment
                     obs, _, done, _ = env.step(action)
+                    print(f"step {t}, state {state} . done status {done}")
                     if done:
                         task_successes += 1
                         total_successes += 1
