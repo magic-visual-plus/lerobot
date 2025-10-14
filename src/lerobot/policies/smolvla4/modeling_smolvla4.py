@@ -1160,7 +1160,7 @@ class VLAFlowMatching(nn.Module):
 
         if True:
         # with torch.no_grad():
-            past_key_values, prefix_out = self.vlm.prepare_for_generation(
+            past_key_values, prefix_out, hidden_states = self.vlm.prepare_for_generation(
                 attention_mask=attention_matrix_prefix,
                 position_ids=prefix_position_ids,
                 inputs_embeds=prefix_embs,
@@ -1206,7 +1206,7 @@ class VLAFlowMatching(nn.Module):
             prefix_pad_masks, suffix_pad_masks, img_range, lang_range, state_range, box_range, depth_range
         )
 
-        past_key_values, prefix_embs = self.vlm.prepare_for_generation(
+        past_key_values, prefix_embs, hidden_states = self.vlm.prepare_for_generation(
             attention_mask=attention_matrix_prefix,
             position_ids=prefix_position_ids,
             inputs_embeds=prefix_embs,

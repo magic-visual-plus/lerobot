@@ -172,18 +172,19 @@ class SmolVLM(nn.Module):
             inputs_embeds = inputs_embeds.to(self.vlm_dtype)
             pass
         
+        attention_mask = attention_mask.unsqueeze(1)
         # context attention
         result = self.vlm.forward(
-            attention_mask_cross=None,
-            attention_mask_self=attention_mask,
+            attention_mask=attention_mask,
             position_ids=position_ids,
             inputs_embeds=inputs_embeds,
             use_cache=True,
+            output_hidden_states=False,
         )
         past_key_values = result.past_key_values
         out_embeds = result.last_hidden_state.to(torch.float32)
 
-        return past_key_values.to_legacy_cache(), out_embeds
+        return past_key_values.to_legacy_cache(), out_embeds, result.hidden_states
     
     def forward(
         self,
