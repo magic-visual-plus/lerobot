@@ -525,8 +525,16 @@ class SmolVLA4Policy(PreTrainedPolicy):
             raise ValueError(
                 f"All image features are missing from the batch. At least one expected. (batch: {batch.keys()}) (image_features:{self.config.image_features})"
             )
+        # import ipdb; ipdb.set_trace();
+        # print(f'image keys {present_img_keys}')
+        # make primary image key in the first image 
+        orderd_present_img_keys = [self.config.primary_image_feature_key]
+        present_img_keys.remove(self.config.primary_image_feature_key)
+        orderd_present_img_keys.extend(present_img_keys)
+        # import ipdb; ipdb.set_trace();
+        # print(f'orderd present img keys {orderd_present_img_keys}')
         # Preprocess image features present in the batch
-        for key in present_img_keys:
+        for key in orderd_present_img_keys:
             img = batch[key][:, -1, :, :, :] if batch[key].ndim == 5 else batch[key]
             if self.config.resize_imgs_with_padding is not None:
                 img = resize_with_pad(img, *self.config.resize_imgs_with_padding, pad_value=0)
@@ -915,6 +923,7 @@ class VLAFlowMatching(nn.Module):
                 pass
             pass
         img_range = (0, sum([e.shape[1] for e in embs]))
+        # import ipdb; ipdb.set_trace()
         lang_emb = self.vlm.embed_language_tokens(lang_tokens)
         # Normalize language embeddings
         lang_emb_dim = lang_emb.shape[-1]
@@ -1068,7 +1077,7 @@ class VLAFlowMatching(nn.Module):
         return suffix_outs
        
     def generate_attention_matrix(
-            self, prefix_pad_masks, suffix_pad_masks, img_range, lang_range, state_range, box_range, depth_range):
+            self, prefix_pad_masks, suffix_pad_masks, img_len, img_range, lang_range, state_range, box_range, depth_range):
         bsize = prefix_pad_masks.shape[0]
         prefix_len = prefix_pad_masks.shape[1]
 
@@ -1093,15 +1102,26 @@ class VLAFlowMatching(nn.Module):
         
         if self.config.attention_mode == "custom":
             # for image attention
-            attention_matrix_prefix[:, img_range[0]:img_range[1], img_range[0]:img_range[1]] = True
-            attention_matrix_prefix[:, img_range[0]:img_range[1], lang_range[0]:lang_range[1]] = True
-            attention_matrix_prefix[:, lang_range[0]:lang_range[1], img_range[0]:img_range[1]] = True
+            # primary image and write image should not attention each other
+            image_embeding_length = img_range[1] - img_range[0]
+            per_image_embeding_length = image_embeding_length // img_len
+            
+            primary_image_embeding_end = img_range[0] + per_image_embeding_length
+            # primary image self attention
+            attention_matrix_prefix[:, img_range[0]:primary_image_embeding_end, img_range[0]:primary_image_embeding_end] = True
+            # other image length
+            attention_matrix_prefix[:, primary_image_embeding_end:img_range[1], primary_image_embeding_end:img_range[1]] = True
+            
+            # for lang attention
+            attention_matrix_prefix[:, img_range[0]:primary_image_embeding_end, lang_range[0]:lang_range[1]] = True
+            attention_matrix_prefix[:, lang_range[0]:lang_range[1], img_range[0]:primary_image_embeding_end] = True
+            
             attention_matrix_prefix[:, lang_range[0]:lang_range[1], lang_range[0]:lang_range[1]] = True
             # for state attention
             attention_matrix_prefix[:, state_range[0]:state_range[1], img_range[0]:img_range[1]] = True
             attention_matrix_prefix[:, state_range[0]:state_range[1], state_range[0]:state_range[1]] = True
-            # for box attention
-            attention_matrix_prefix[:, box_range[0]:box_range[1], img_range[0]:img_range[1]] = True
+            # for box attention, only attention to first primary image
+            attention_matrix_prefix[:, box_range[0]:box_range[1], img_range[0]:primary_image_embeding_end] = True
             attention_matrix_prefix[:, box_range[0]:box_range[1], lang_range[0]:lang_range[1]] = True
             attention_matrix_prefix[:, box_range[0]:box_range[1], box_range[0]:box_range[1]] = True
             # for depth attention
@@ -1153,9 +1173,11 @@ class VLAFlowMatching(nn.Module):
             suffix_embs, suffix_pad_masks, suffix_position_ids = self.embed_suffix_autoregressive(actions.shape[0])
             u_t = actions
             pass
-        
+        img_len = len(images)
+        # print(f'img len {img_len}')
+        # import ipdb; ipdb.set_trace();
         attention_matrix_prefix, attention_matrix_cross, attention_matrix_suffix = self.generate_attention_matrix(
-            prefix_pad_masks, suffix_pad_masks, img_range, lang_range, state_range, box_range, depth_range
+            prefix_pad_masks, suffix_pad_masks, img_len, img_range, lang_range, state_range, box_range, depth_range
         )
 
         if True:
@@ -1202,8 +1224,9 @@ class VLAFlowMatching(nn.Module):
         img_range, lang_range, state_range, box_range, depth_range = ranges
 
         _, suffix_pad_masks, _ = self.embed_suffix_autoregressive(bsize)
+        img_len = len(images)
         attention_matrix_prefix, attention_matrix_cross, attention_matrix_suffix = self.generate_attention_matrix(
-            prefix_pad_masks, suffix_pad_masks, img_range, lang_range, state_range, box_range, depth_range
+            prefix_pad_masks, suffix_pad_masks, img_len, img_range, lang_range, state_range, box_range, depth_range
         )
 
         past_key_values, prefix_embs, hidden_states = self.vlm.prepare_for_generation(

@@ -106,7 +106,9 @@ class SmolVLA4Config(PreTrainedConfig):
     max_image_text_length: int = 1024
     max_state_length: int = 256
     
-
+    # 主的image特征名称 
+    primary_image_feature_key = "observation.images.image"
+    
     pad_language_to: str = "longest"  # "max_length"
 
     num_expert_layers: int = -1  # Less or equal to 0 is the default where the action expert has the same number of layers of VLM. Otherwise the expert have less layers.

@@ -9,11 +9,13 @@ import logging
 import math
 import pathlib
 import os
+import sys
 from sys import version
 import time
 from typing import Any
 from loguru import logger
-
+# use huggingface mirror
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 # os.environ["MUJOCO_GL"] = "egl"
 # os.environ["MUJOCO_GL"] = "osmesa"
 
@@ -31,20 +33,35 @@ from lerobot.policies.smolvla3.modeling_smolvla3 import SmolVLA3Policy
 from lerobot.policies.smolvla2.modeling_smolvla2 import SmolVLA2Policy
 from lerobot.policies.smolvla4.modeling_smolvla4 import SmolVLA4Policy
 from lerobot.policies.pretrained import PreTrainedPolicy
+
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 LIBERO_DUMMY_ACTION = [0.0] * 6 + [-1.0]
+# LIBERO_DUMMY_ACTION: list[Any] = [1, 1.5, -0.46, 0.0, 0.0, 0.0, -1.0]
+# LIBERO_DUMMY_ACTION = [-1.5, -1.4, -0.46, 0.0, 0.0, 0.0, -1.0]
+# arm out of view
+# LIBERO_DUMMY_ACTION: list[Any] = [-3, 3, 1.9, 0.0, 0.0, 0.0, -1.0]
+
 LIBERO_ENV_RESOLUTION = 256  # resolution used to render training data
 
-# NEED_RAND_POS = True
 NEED_RAND_POS = False
-NEED_BBOX = True
+POS_LEVEL = 2
+NEED_BBOX = False
 NEED_RAND_CAM = False
 
-DISABLE_STATE = True
+DISABLE_STATE = False
 DISABLE_IMAGE = False
 DISABLE_WRIST_IMAGE = False
 DISABLE_PROMPT = False
+
+NEED_FIRST_FRAME = False
+
+# EVAL_TASK_ID = 8
+EVAL_TASK_ID = 0
+# EVAL_TASK_ID = 7
+
+BLACK_GRIPPER = False
+Gripper_ID_DICT: dict[str, int] = {"libero_goal" : 10}
 
 def normalize_gripper_action(action, binarize=True):
     """
@@ -84,11 +101,11 @@ class Args:
 
     # --- Hugging Face arguments ---
     # policy_path: str = "lerobot/smolvla_base"
-    policy_path: str = "/opt/projects/news/lerobot/outputs/train/libero_smolvla2_0828/checkpoints/050000/pretrained_model"
+    policy_path: str = "/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/20251016/libero_smolvla4_1016_new_goal_autodl_bbox_no_wrist_imag/pretrained_model_7w"
     """Path to the pretrained policy on the Hugging Face Hub or local directory."""
 
     # --- LIBERO environment-specific parameters ---
-    task_suite_name: str = "libero_spatial"
+    task_suite_name: str = "libero_goal"
     """Task suite. Options: libero_spatial, libero_object, libero_goal, libero_10, libero_90"""
     num_steps_wait: int = 10
     """Number of steps to wait for objects to stabilize in sim."""
@@ -168,13 +185,17 @@ def eval_libero(args: Args) -> None:
         # Fallback for custom task suites
         max_steps = 520
 
+    gripper_id = Gripper_ID_DICT[args.task_suite_name]
+    print(f'gripper id {gripper_id}')
+
     # --- Evaluation Loop ---
     total_episodes, total_successes = 0, 0
     # TODO disable later
     # num_tasks_in_suite = 1
     for task_id in tqdm(range(num_tasks_in_suite), desc="Tasks"):
-        if task_id != 5:
-            continue
+        if EVAL_TASK_ID >= 0:
+            if task_id != EVAL_TASK_ID:
+                continue
         # Get task
         task = task_suite.get_task(task_id)
 
@@ -183,7 +204,7 @@ def eval_libero(args: Args) -> None:
 
         # Initialize LIBERO environment and task description
         env, task_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, args.seed)
-
+        
         # Start episodes
         task_episodes, task_successes = 0, 0
         for episode_idx in tqdm(
@@ -238,9 +259,18 @@ def eval_libero(args: Args) -> None:
                 logging.info(f"object_name {object_name}, 四元数: {pose['quat']}")
                 workspace_offset = env.env.get_workspace_offset()
                 logging.info(f'workspace offset {workspace_offset}')
-                # random x offset 
-                x_offset = np.random.uniform(0.03, 0.1)
-                y_offset = np.random.uniform(0.03, 0.1)
+                # random x offset
+                if POS_LEVEL == 1:
+                    x_offset = np.random.uniform(0.01, 0.05)
+                    y_offset = np.random.uniform(0.01, 0.05)
+                elif POS_LEVEL == 2:
+                    x_offset = np.random.uniform(0.03, 0.1)
+                    y_offset = np.random.uniform(0.03, 0.1)
+                else:
+                    x_offset = np.random.uniform(0.03, 0.05)
+                    y_offset = np.random.uniform(0.03, 0.25)
+                # x_offset = np.random.uniform(0.03, 0.1)
+                # y_offset = np.random.uniform(0.03, 0.1)
                 new_pos = pos + [x_offset, y_offset, -0.9]
                 logging.info(f'set object_name {object_name}, old pos {pos}, new pos {new_pos}')
                 # TODO enable later
@@ -268,6 +298,32 @@ def eval_libero(args: Args) -> None:
                     wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
                     agentview_image = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
                     agentview_image_bbox = agentview_image.copy()
+                    if BLACK_GRIPPER:
+                        # get segementation mask
+                        agentview_segmentation = np.ascontiguousarray(obs["agentview_segmentation_instance"][::-1, ::-1])
+                        seg_uint8 = agentview_segmentation.astype(np.uint8)
+                        # find griipper id in seg_uint8
+                        gripper_mask = np.ones_like(seg_uint8) * 255
+                        gripper_mask[seg_uint8 == gripper_id] = 0
+                        
+                        
+                        # fill gripper mask to agentview_image
+                        agentview_image = cv2.bitwise_and(agentview_image, agentview_image, mask=gripper_mask)
+                        
+                        # Find contours of the gripper mask and fit a bounding rectangle
+                        gripper_binary = (gripper_mask == 0).astype(np.uint8) * 255
+                        contours, _ = cv2.findContours(gripper_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                        if contours:
+                            # Find the largest contour
+                            largest_contour = max(contours, key=cv2.contourArea)
+                            
+                            # Fit a bounding rectangle around the contour
+                            x, y, w, h = cv2.boundingRect(largest_contour)
+                            
+                            # Fill the bounding rectangle with black color
+                            agentview_image[y:y+h, x:x+w] = [0, 0, 0]
+
+                        agentview_image_bbox = agentview_image.copy()
                     frames.append(agentview_image)
 
                     # Prepare observations dict
@@ -281,11 +337,11 @@ def eval_libero(args: Args) -> None:
                     
                     if DISABLE_STATE:
                         # disable state to zeros
-                        # state = np.zeros_like(state)
+                        state = np.zeros_like(state)
                         # fix state most right 
-                        state = np.array([-0.06813535, -0.19478797,  1.16284806,  3.099479,   -0.01742949, -0.80769123, 0.01611037, -0.03959287])
+                        # state = np.array([-0.06813535, -0.19478797,  1.16284806,  3.099479,   -0.01742949, -0.80769123, 0.01611037, -0.03959287])
                         # fix state most left
-                        state = np.array([-1.68719120e-03,  2.43636704e-01,  1.02261244e+00, 3.099479,   -0.01742949, -0.80769123, 0.01611037, -0.03959287])
+                        # state = np.array([-1.68719120e-03,  2.43636704e-01,  1.02261244e+00, 3.099479,   -0.01742949, -0.80769123, 0.01611037, -0.03959287])
 
                     if DISABLE_IMAGE:
                         agentview_image = np.zeros_like(agentview_image)
@@ -329,10 +385,15 @@ def eval_libero(args: Args) -> None:
                                 (0, 255, 0),
                                 2,
                             )
-                            frames.append(agentview_image_bbox)
+                            frames.append(agentview_image_bbox)    
                         else:
                             ...
                             # logging.info(f"action_tensor {action_tensor}")
+                        if NEED_FIRST_FRAME:
+                            cv2.imwrite("test_smolv4.png", agentview_image_bbox)
+                            env.close()
+                            del env
+                            sys.exit(-1)
                         end = time.time()
                         # logging.info(f"Inference time: {(end-start) * 1000 :.2f}ms")
                     action = action_tensor.cpu().numpy()[0]
@@ -343,7 +404,7 @@ def eval_libero(args: Args) -> None:
 
                     # Execute action in environment
                     obs, _, done, _ = env.step(action)
-                    print(f"step {t}, state {state} . done status {done}")
+                    # print(f"step {t}, state {state} . done status {done}")
                     if done:
                         task_successes += 1
                         total_successes += 1
@@ -403,6 +464,9 @@ def _get_libero_env(task, resolution, seed):
         "bddl_file_name": str(task_bddl_file),
         "camera_heights": resolution,
         "camera_widths": resolution,
+        "camera_depths": True,
+        "camera_segmentations": 'instance',
+        # "camera_segmentations": 'class',
     }
     env = OffScreenRenderEnv(**env_args)
     env.seed(seed)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
