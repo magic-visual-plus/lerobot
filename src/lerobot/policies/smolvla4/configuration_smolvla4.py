@@ -42,6 +42,7 @@ class SmolVLA4Config(PreTrainedConfig):
     loss_weights: dict[str, float] = field(
         default_factory=lambda: {
             "action": 1.0,
+            "point": 0,
             "box": 0.0,
             "depth": 0.0,
         }
