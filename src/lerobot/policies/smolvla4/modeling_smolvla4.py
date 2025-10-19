@@ -508,7 +508,7 @@ class SmolVLA4Policy(PreTrainedPolicy):
         loss_depth = loss_depth.mean()
 
         # For backward pass
-        loss = loss_action + loss_box + loss_depth
+        loss = loss_action + loss_box + loss_depth + loss_point
         # For backward pass
         loss_dict["loss"] = loss.item()
         loss_dict["loss_action"] = loss_action.item()
@@ -696,6 +696,25 @@ def pad_tensor(tensor, max_len, pad_value=0):
     padded_tensor[:, :d] = tensor  # Efficient in-place copy
 
     return padded_tensor
+
+class PointOutputProjectionMLP(nn.Module):
+    """MLP for output projection."""
+
+    def __init__(self, input_dim, output_dim, hidden_dim):
+        super().__init__()
+        self.input_linear = nn.Linear(input_dim, hidden_dim)
+        self.activation = nn.SiLU() # swish == silu
+        self.norm = nn.BatchNorm1d(hidden_dim)
+        self.output_linear = nn.Linear(hidden_dim, output_dim)
+        self.output_activation = nn.Sigmoid()
+
+    def forward(self, x):
+        x_ = self.input_linear(x)
+        x_ = self.activation(x_)
+        x_ = self.norm(x_.transpose(1, 2)).transpose(1, 2)  # BatchNorm1d expects (B, C, L)
+        x_ = self.output_linear(x_)
+        x = self.output_activation(x_)  
+        return x
 
 
 class OutputProjectionMLP(nn.Module):

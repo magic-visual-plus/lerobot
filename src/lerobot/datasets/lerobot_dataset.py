@@ -729,7 +729,13 @@ class LeRobotDataset(torch.utils.data.Dataset):
         # Add task as a string
         task_idx = item["task_index"].item()
         item["task"] = self.meta.tasks[task_idx]
-
+        
+        # TODO disable later
+        unused_features: list[str] = ['observation.images.segmentation', 'observation.images.wrist_segmentation', 'observation.states.ee_state', 'observation.states.joint_state', 'observation.states.gripper_state']
+        for feature in unused_features:
+            if feature in item:
+                del item[feature]
+        
         return item
 
     def __repr__(self):
