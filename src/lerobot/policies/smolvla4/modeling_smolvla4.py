@@ -633,14 +633,24 @@ class SmolVLA4Policy(PreTrainedPolicy):
     
     def prepare_box_and_point(self, batch):
         if "bboxes" in batch:
-            boxes = batch['bboxes']
+            x = batch['bboxes']
+            # 取出第2列（索引1）
+            key = x[:, :, 1]  # shape = (48, 10)
+            key = torch.where(key < 0, torch.tensor(100.0, device=x.device), key)
+            # 在第1维 (dim=1, size=10) 上排序
+            _, idx = torch.sort(key, dim=1)
+            # 利用 idx 对第二个维度（dim=1）排序整个 x
+            boxes = torch.gather(x, 1, idx.unsqueeze(-1).expand(-1, -1, x.size(2)))
+            # sort boxes by dim 2
+            # import ipdb; ipdb.set_trace();
             max_num_boxes = self.config.max_num_embeddings_box
             boxes_tensor = torch.zeros(
                 (boxes.shape[0], max_num_boxes, 4), device=boxes.device
             )
             boxes_tensor[:, : boxes.shape[1], :] = boxes[:, : max_num_boxes, -4:]
-            box_masks = boxes_tensor.sum(dim=-1) > 1e-8
-            
+            # box_masks = boxes_tensor.sum(dim=-1) > 1e-8
+            box_masks = boxes[:, :, 1] == 0
+            # import ipdb; ipdb.set_trace()
             # Calculate center points from box coordinates (class, x, y, w, h)
             # Extract x, y, w, h and compute center points (cx, cy)
             point_tensor = torch.zeros(
@@ -651,7 +661,7 @@ class SmolVLA4Policy(PreTrainedPolicy):
             # Calculate center points: cx = x + w/2, cy = y + h/2
             point_tensor[:, :, 0] = box_coords[:, :, 0] + box_coords[:, :, 2] / 2  # cx = x + w/2
             point_tensor[:, :, 1] = box_coords[:, :, 1] + box_coords[:, :, 3] / 2  # cy = y + h/2
-            point_masks = point_tensor.sum(dim=-1) > 1e-8
+            point_masks = boxes[:, :, 1] == 0
             return boxes_tensor, box_masks, point_tensor, point_masks
         else:
             bsize = batch[OBS_STATE].shape[0]
