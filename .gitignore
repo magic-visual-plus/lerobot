@@ -175,3 +175,7 @@ outputs/
 .cache/*
 nohup.out
 *.mp4
+*.stl
+*.urdf
+*.xml
+*.part

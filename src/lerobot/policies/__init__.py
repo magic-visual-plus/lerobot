@@ -15,9 +15,24 @@
 from .act.configuration_act import ACTConfig as ACTConfig
 from .diffusion.configuration_diffusion import DiffusionConfig as DiffusionConfig
 from .pi0.configuration_pi0 import PI0Config as PI0Config
+from .pi05.configuration_pi05 import PI05Config as PI05Config
 from .smolvla.configuration_smolvla import SmolVLAConfig as SmolVLAConfig
+from .smolvla.processor_smolvla import SmolVLANewLineProcessor
 from .tdmpc.configuration_tdmpc import TDMPCConfig as TDMPCConfig
 from .vqbet.configuration_vqbet import VQBeTConfig as VQBeTConfig
 from .smolvla2.configuration_smolvla2 import SmolVLA2Config as SmolVLA2Config
 from .smolvla3.configuration_smolvla3 import SmolVLA3Config as SmolVLA3Config
 from .smolvla4.configuration_smolvla4 import SmolVLA4Config as SmolVLA4Config
+
+__all__ = [
+    "ACTConfig",
+    "DiffusionConfig",
+    "PI0Config",
+    "PI05Config",
+    "SmolVLAConfig",
+    "SmolVLA2Config",
+    "SmolVLA3Config",
+    "SmolVLA4Config",
+    "TDMPCConfig",
+    "VQBeTConfig",
+]
