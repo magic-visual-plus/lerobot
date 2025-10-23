@@ -11,6 +11,8 @@ import sys
 import torch
 import pathlib
 import os
+import ipdb
+
 from torchvision import transforms
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
@@ -30,13 +32,30 @@ policy_version_map: dict[str, Any] = {
 
 LIBERO_ENV_RESOLUTION = 256
 
+NEED_FIRST_EPISODE = False
+DISABLE_STATE = False
+DISABLE_IMAGE = False
+DISABLE_WRIST_IMAGE = False
+DISABLE_LANG = False
+
 @dataclasses.dataclass
 class Args:
     """
     Evaluation arguments for smolVLA on LIBERO.
     """
     # --- Hugging Face arguments ---
-    policy_path: str = "/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/1020/only_bbox/pretrained_model_2w"
+    # policy_path: str = "/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/1020/only_bbox/pretrained_model_2w"
+    # policy_path: str = "/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/1020/disable_action/pretrained_model_2w"
+    
+    # disable box embd
+    # policy_path:str = '/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/1022/libero_smolvla4_1022_goal_autodl_disable_bbox_emb/pretrained_model_2w'
+    
+    # freeze vision encoder
+    # policy_path: str = '/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/1023/libero_smolvla4_1023_goal_autodl_disable_bbox_emb_vit_encoder_action/pretrained_model_5k'
+    
+    policy_path: str = '/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/1023/libero_smolvla4_1023_goal_autodl_disable_bbox_emb_vit_encoder_action/pretrained_model_2w'
+    # adj weight
+    #  policy_path:str ='/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/1022/libero_smolvla4_1022_goal_autodl_action_pretrain_bbox_aj_weight/pretrained_model_3w'
 
     # --- LIBERO environment-specific parameters ---
     task_suite_name: str = "libero_goal"
@@ -47,7 +66,8 @@ class Args:
     """Number of rollouts per task."""
 
     # --- Evaluation arguments ---
-    video_out_path: str = "/opt/projects/xbkaishui/lerobot/data/libero/1020/new_goal_autodl_only_bbox"
+    # video_out_path: str = "/opt/projects/xbkaishui/lerobot/data/libero/1022/disable_bbox_emb_2w"
+    video_out_path: str = "/opt/projects/xbkaishui/lerobot/data/libero/1023/disable_bbox_emb_vit_encoder_action_2w"
     """Path to save videos."""
     device: str = "cuda"
     """Device to use for evaluation."""
@@ -72,6 +92,7 @@ def init_policy(args: Args ):
     print(f'after reset n_action_steps:{policy.config.n_action_steps}')
     policy.to(args.device)
     policy.eval()
+    # ipdb.set_trace()
     return policy
 
 @draccus.wrap()
@@ -85,7 +106,8 @@ def replay_and_eval_bbox(args: Args):
 
     to_pil = transforms.ToPILImage()
 
-    dataset_path = '/opt/projects/xbkaishui/lerobot/data/libero/1019/new_goal_autodl_add_point_5w/libero_eval_20251020_154021'
+    # dataset_path = '/opt/projects/xbkaishui/lerobot/data/libero/1019/new_goal_autodl_add_point_5w/libero_eval_20251020_154021'
+    dataset_path = '/opt/projects/xbkaishui/lerobot/data/libero/1021/new_goal_autodl_with_bbox_action_randpos/libero_eval_20251022_002541'
     
     # dataset_path = '/opt/projects/xbkaishui/lerobot/data/libero/1019/new_goal_autodl_add_point_5w_2/libero_eval_20251020_165848'
 
@@ -101,6 +123,9 @@ def replay_and_eval_bbox(args: Args):
     for episode_idx in range(total_episodes):
         # todo
         # episode_idx = episode_idx + 1 
+        if episode_idx not in [0,1,2,3,4,5]:
+            print(f"Processing episode {episode_idx}")
+            continue
         tasks = dataset.meta.episodes[episode_idx]["tasks"][0]
         
         # print(f"{dataset[episode_idx]['observation.state'].shape=}")  # (6, c)
@@ -117,19 +142,32 @@ def replay_and_eval_bbox(args: Args):
             task_description = tasks
             agentview_image_bbox = to_pil(frame['observation.images.image'])
             agentview_image_bbox = np.asarray(agentview_image_bbox).copy()
+            agentview_image = frame['observation.images.image'].to(args.device).unsqueeze(0)
+            wrist_image = frame['observation.images.wrist_image'].to(args.device).unsqueeze(0)
+            
+            if DISABLE_IMAGE:
+                agentview_image = torch.zeros_like(agentview_image, device=args.device)
+            if DISABLE_WRIST_IMAGE:
+                wrist_image = torch.zeros_like(wrist_image, device=args.device)
+            
+            state = state.to(args.device).unsqueeze(0)
+            if DISABLE_STATE:
+                state = torch.zeros_like(state, device=args.device)
+            if DISABLE_LANG:
+                task_description = ""
+            # TODO disable later task_description
+            # task_description = "plate"
             # compose obs and send to policy
             observation = {
-                "observation.images.image": frame['observation.images.image']
-                .to(args.device).unsqueeze(0),
-                "observation.images.wrist_image": frame['observation.images.wrist_image']
-                .to(args.device).unsqueeze(0),
-                "observation.state": state.to(args.device).unsqueeze(0),
+                "observation.images.image": agentview_image,
+                "observation.images.wrist_image": wrist_image,
+                "observation.state": state,
                 "task": task_description,
             }
             
             # skip too many frames
-            if frame_index % 2 != 0:
-                continue
+            # if frame_index % 2 != 0:
+                # continue
             
             with torch.inference_mode():
                 action_result_tensor = policy.select_action(observation, need_bbox = True)
@@ -184,8 +222,8 @@ def replay_and_eval_bbox(args: Args):
         writer.close()
         logger.info(f"Saved video to {video_path}") 
         
-        # TODO disable later
-        # sys.exit(1)
+        if NEED_FIRST_EPISODE:
+            sys.exit(1)
 
 if __name__ == "__main__":
     replay_and_eval_bbox()
