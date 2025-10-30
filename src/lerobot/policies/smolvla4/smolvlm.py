@@ -93,6 +93,7 @@ class SmolVLM(nn.Module):
 
         self.freeze_vision_encoder = freeze_vision_encoder
         self.set_requires_grad()
+        print(f'vlm freeze_vision_encoder flag {freeze_vision_encoder}')
 
     def get_vlm_model(self):
         return self.vlm
@@ -102,6 +103,10 @@ class SmolVLM(nn.Module):
             self.get_vlm_model().vision_model.eval()
             for params in self.get_vlm_model().vision_model.parameters():
                 params.requires_grad = False
+                
+            # self.get_vlm_model().text_model.eval()
+            # for params in self.get_vlm_model().text_model.parameters():
+                # params.requires_grad = False
         else:
             # To avoid unused params issue with distributed training
             last_layers = [self.num_vlm_layers - 1]
@@ -122,6 +127,7 @@ class SmolVLM(nn.Module):
 
         if self.freeze_vision_encoder:
             self.get_vlm_model().vision_model.eval()
+            # self.get_vlm_model().text_model.eval()
 
 
     def embed_image(self, image: torch.Tensor):

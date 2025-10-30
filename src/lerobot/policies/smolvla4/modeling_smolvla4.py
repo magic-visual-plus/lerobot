@@ -356,6 +356,9 @@ class SmolVLA4Policy(PreTrainedPolicy):
         self.model = VLAFlowMatching(config)
         self.reset()
 
+    def disable_bbox_grad(self):
+        self.model.disable_bbox_grad()
+    
     def reset(self):
         """This should be called whenever the environment is reset."""
         self._queues = {
@@ -509,6 +512,7 @@ class SmolVLA4Policy(PreTrainedPolicy):
 
         # For backward pass
         loss = loss_action + loss_box + loss_depth + loss_point
+
         # For backward pass
         loss_dict["loss"] = loss.item()
         loss_dict["loss_action"] = loss_action.item()
@@ -894,6 +898,14 @@ class VLAFlowMatching(nn.Module):
         self.image_end_token = torch.tensor([self.fake_image_token], dtype=torch.long)
         self.prefix_length = self.config.prefix_length
 
+    def disable_bbox_grad(self):
+        # import ipdb; ipdb.set_trace()
+        self.box_in_emb.requires_grad = False
+        self.box_out_proj.requires_grad = False
+        
+        for params in self.box_out_proj.parameters():
+            params.requires_grad = False
+        
     def set_requires_grad(self):
         for params in self.state_proj.parameters():
             params.requires_grad = self.config.train_state_proj
@@ -1268,8 +1280,11 @@ class VLAFlowMatching(nn.Module):
                 suffix_embs, attention_matrix_suffix, suffix_position_ids,
             )
             pass
+        
+        first_box = prefix_out[:, box_range[0]:box_range[0]+1, :] # (B, 1, D)
+        action_combine = action_out + first_box
 
-        v_t = self.action_out_proj(action_out)
+        v_t = self.action_out_proj(action_combine)
 
         box_out = prefix_out[:, box_range[0]:box_range[1], :]  # (B, num_box, D)
         box_pred = self.box_out_proj(box_out)
@@ -1318,6 +1333,8 @@ class VLAFlowMatching(nn.Module):
         box_pred = self.box_out_proj(box_emb)
         depth_pred = self.depth_image_out_proj(depth_emb)
         point_pred = self.point_out_proj(point_emb)
+        
+        first_box = prefix_embs[:, box_range[0]:box_range[0]+1, :] # (B, 1, D)
 
         if self.config.num_steps > 0:
             if noise is None:
@@ -1339,6 +1356,7 @@ class VLAFlowMatching(nn.Module):
                     past_key_values,
                     x_t,
                     expanded_time,
+                    first_box,
                 )
                 # Euler step
                 x_t = x_t + v_t * dt
@@ -1367,6 +1385,7 @@ class VLAFlowMatching(nn.Module):
         past_key_values,
         x_t,
         timestep,
+        box_emb,
     ):
         """Apply one denoising step of the noise `x_t` at a given timestep."""
         if self.config.num_steps > 0:
@@ -1381,7 +1400,7 @@ class VLAFlowMatching(nn.Module):
             past_key_values, attention_matrix_cross,
             suffix_embs, attention_matrix_suffix, suffix_position_ids,
         )
-
-        v_t_action = self.action_out_proj(action_out)
+        action_combine = action_out + box_emb
+        v_t_action = self.action_out_proj(action_combine)
         return v_t_action
     

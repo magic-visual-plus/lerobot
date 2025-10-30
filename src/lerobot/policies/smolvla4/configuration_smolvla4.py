@@ -95,7 +95,8 @@ class SmolVLA4Config(PreTrainedConfig):
     scheduler_warmup_steps: int = 1_000
     scheduler_decay_steps: int = 40_000
     scheduler_decay_lr: float = 1e-6
-
+    
+    # vlm_model_name: str = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct" 
     vlm_model_name: str = "HuggingFaceTB/SmolVLM2-256M-Video-Instruct"  # Select the VLM backbone.
     load_vlm_weights: bool = True  # Set to True in case of training the expert from scratch. True when init from pretrained SmolVLA weights
 
