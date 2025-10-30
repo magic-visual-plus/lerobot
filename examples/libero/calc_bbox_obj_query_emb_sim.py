@@ -188,8 +188,9 @@ def calc_obj_query_emb_sim():
     
     # model_disable_action: str = '/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/1023/libero_smolvla4_1023_goal_autodl_disable_bbox_emb_vit_encoder_action/pretrained_model_5k'
 
-    model_disable_action: str = '/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/1023/libero_smolvla4_1023_goal_autodl_disable_bbox_emb_vit_encoder_action/pretrained_model_2w'
+    # model_disable_action: str = '/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/1023/libero_smolvla4_1023_goal_autodl_disable_bbox_emb_vit_encoder_action/pretrained_model_2w'
 
+    model_disable_action: str = '/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/1023/libero_smolvla4_1023_goal_autodl_disable_bbox_emb_vit_encoder_text_action/pretrained_model_2w'
     # model_disable_action = model_ckpt_pre_train
     seed = 7
     torch.manual_seed(seed)

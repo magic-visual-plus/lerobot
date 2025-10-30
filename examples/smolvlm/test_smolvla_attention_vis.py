@@ -41,7 +41,7 @@ class Args:
     Evaluation arguments for smolVLA on LIBERO.
     """
     # --- Hugging Face arguments ---
-    policy_path: str = "/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/1020/only_bbox/pretrained_model_2w"
+    policy_path: str = "/autodl-fs/data/ckpts/1020/libero_smolvla4_1020_new_goal_autodl_only_bbox/checkpoints/030000/pretrained_model"
 
     # --- LIBERO environment-specific parameters ---
     task_suite_name: str = "libero_goal"
@@ -52,7 +52,7 @@ class Args:
     """Number of rollouts per task."""
 
     # --- Evaluation arguments ---
-    video_out_path: str = "/opt/projects/xbkaishui/lerobot/data/libero/1020/new_goal_autodl_only_bbox"
+    video_out_path: str = "/opt/product/lerobot/datas"
     """Path to save videos."""
     device: str = "cuda"
     """Device to use for evaluation."""
@@ -88,11 +88,11 @@ def replay_and_eval_bbox(args: Args):
     # --- Load Policy ---
     policy: PreTrainedPolicy = init_policy(args)
     
-    ipdb.set_trace()
+    # ipdb.set_trace()
 
     to_pil = transforms.ToPILImage()
 
-    dataset_path = '/opt/projects/xbkaishui/lerobot/data/libero/1019/new_goal_autodl_add_point_5w/libero_eval_20251020_154021'
+    dataset_path = '/autodl-fs/data/datasets/libero_goal_no_lerobot_0'
     
     # dataset_path = '/opt/projects/xbkaishui/lerobot/data/libero/1019/new_goal_autodl_add_point_5w_2/libero_eval_20251020_165848'
 
