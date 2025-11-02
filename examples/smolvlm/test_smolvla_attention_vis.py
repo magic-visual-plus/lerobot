@@ -13,6 +13,12 @@ import torch
 import pathlib
 import os
 import ipdb
+import math
+import time
+from PIL import Image
+import matplotlib.pyplot as plt
+
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
 from torchvision import transforms
 
@@ -41,7 +47,9 @@ class Args:
     Evaluation arguments for smolVLA on LIBERO.
     """
     # --- Hugging Face arguments ---
-    policy_path: str = "/autodl-fs/data/ckpts/1020/libero_smolvla4_1020_new_goal_autodl_only_bbox/checkpoints/030000/pretrained_model"
+    # policy_path: str = "/autodl-fs/data/ckpts/1020/libero_smolvla4_1020_new_goal_autodl_only_bbox/checkpoints/030000/pretrained_model"
+    policy_path: str = "/root/autodl-fs/ckpts/1030/libero_smolvla4_1030_goal_autodl_bbox_pretrain/checkpoints/020000/pretrained_model"
+    policy_path: str = "/root/autodl-fs/ckpts/1030/libero_smolvla4_1030_goal_single_task_5_ds_mix_action_no_pre/checkpoints/030000/pretrained_model"
 
     # --- LIBERO environment-specific parameters ---
     task_suite_name: str = "libero_goal"
@@ -63,6 +71,11 @@ class Args:
     version: str = "v4"
     
 def init_policy(args: Args ):
+    # fix random seed
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    
+    
     print(f'args version {args.version}')
     policy_clazz = policy_version_map[args.version]
     policy = policy_clazz.from_pretrained(args.policy_path)
@@ -75,109 +88,180 @@ def init_policy(args: Args ):
     print(f'n_action_steps:{policy.config.n_action_steps}')
     policy.config.n_action_steps = 8
     print(f'after reset n_action_steps:{policy.config.n_action_steps}')
+    # change attn implementation to eager
+    policy.model.vlm.vlm.text_model.config._attn_implementation = 'eager'
     policy.to(args.device)
     policy.eval()
     return policy
 
+
+def prepare_obs_from_dataset(dataset_path = '/autodl-fs/data/datasets/libero_goal_no_lerobot_0', episode_idx = 0) -> None:
+    dataset = LeRobotDataset(dataset_path)
+    print(f"Number of episodes selected: {dataset.num_episodes}")
+    print(f"Number of frames selected: {dataset.num_frames}")
+    
+    from_idx = dataset.episode_data_index["from"][episode_idx].item()
+    to_idx = dataset.episode_data_index["to"][episode_idx].item()
+    print(f"episode idx {episode_idx}, task {tasks}, from idx {from_idx} to idx {to_idx}")
+    to_pil = transforms.ToPILImage()
+
+    for frame_index in np.arange(from_idx, to_idx).tolist():
+        # get first eposido
+        frame = dataset[frame_index]
+        state = frame['observation.state']
+        task_description = tasks
+        
+        agentview_image = to_pil(frame['observation.images.image'])
+        # compose obs and send to policy
+        observation = {
+          "observation.images.image": frame['observation.images.image']
+          .to(args.device).unsqueeze(0),
+          "observation.images.wrist_image": frame['observation.images.wrist_image']
+          .to(args.device).unsqueeze(0),
+          "observation.state": state.to(args.device).unsqueeze(0),
+          "task": task_description,
+        }
+        return observation, agentview_image
+
+
+def prepare_fix_obs() -> None:
+    task_description = "push the plate to the front of the stove"
+    # task_description = "push the bowl to the front of the stove"
+    # task_description = "push the stove to the front of the stove"
+    # task_description = "describe the image"
+    task_description = "bottle the"
+    cur_dir = pathlib.Path(__file__).parent.resolve()
+    print(f'cur_dir is {cur_dir}')
+    agentview_image = cv2.imread(f"{cur_dir}/910_main.jpg")
+    # agentview_image = cv2.imread(f"{cur_dir}/4_start.png")
+    state = np.array([0.04544, 0.15893,  0.92672 , 3.12924 ,-0.03993 , 0.04949 , 0.00098, -0.00002])
+    wrist_img = cv2.imread(f"{cur_dir}/910_wrist.jpg")
+    observation = {
+        "observation.images.image": torch.from_numpy(agentview_image / 255.0)
+        .permute(2, 0, 1).to(torch.float32).to('cuda').unsqueeze(0),
+        "observation.images.wrist_image": torch.from_numpy(wrist_img / 255.0)
+        .permute(2, 0, 1).to(torch.float32).to('cuda').unsqueeze(0),
+        "observation.state": torch.from_numpy(state).to(torch.float32).to('cuda').unsqueeze(0),
+        "task": task_description,
+    }
+    return observation, agentview_image
+
+
+def infer_vlm_model(policy, obs):
+    """"
+    run single vlm forward for vlm inference, need to check attention
+    """
+    batch = policy._prepare_batch(obs)
+    images, img_masks = policy.prepare_images(batch)
+    state = policy.prepare_state(batch)
+    lang_tokens, lang_masks = policy.prepare_language(batch)
+    
+    print(f'len lang {lang_tokens.shape}')
+    
+    prefix_embs, prefix_pad_masks, prefix_position_ids, ranges = policy.model.embed_prefix(
+        images, img_masks, lang_tokens, lang_masks, state=state
+    )
+    img_range, lang_range, state_range, box_range, depth_range, point_range = ranges
+    bsize = state.shape[0]
+    
+    _, suffix_pad_masks, _ = policy.model.embed_suffix_autoregressive(bsize)
+    img_len = len(images)
+    attention_matrix_prefix, attention_matrix_cross, attention_matrix_suffix = policy.model.generate_attention_matrix(
+        prefix_pad_masks, suffix_pad_masks, img_len, img_range, lang_range, state_range, box_range, depth_range, point_range
+    )
+    past_key_values, prefix_embs_after_attn, _, result = policy.model.vlm.prepare_for_generation(
+        attention_mask=attention_matrix_prefix,
+        position_ids=prefix_position_ids,
+        inputs_embeds=prefix_embs,
+        output_hidden_states=True,
+        output_attentions=True,
+    )
+    return prefix_embs, prefix_embs_after_attn, ranges, result
+
+def calculate_plt_size(attention_layer_num):
+    """
+    calculate_plt_size 的作用是计算绘图网格的行列数
+    Args:
+        attention_layer_num (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    num_layers = attention_layer_num
+    cols = math.ceil(math.sqrt(num_layers))
+    rows = math.ceil(num_layers / cols)
+    return rows, cols
+
 @draccus.wrap()
 def replay_and_eval_bbox(args: Args):
     task_id = 5
-    
+    cur_dir = pathlib.Path(__file__).parent.resolve()
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     # --- Load Policy ---
     policy: PreTrainedPolicy = init_policy(args)
     
-    # ipdb.set_trace()
+    observation, agentview_image = prepare_fix_obs()
 
-    to_pil = transforms.ToPILImage()
-
-    dataset_path = '/autodl-fs/data/datasets/libero_goal_no_lerobot_0'
+    prefix_embs, prefix_embs_after_attn, ranges, infer_result = infer_vlm_model(policy, observation)
     
-    # dataset_path = '/opt/projects/xbkaishui/lerobot/data/libero/1019/new_goal_autodl_add_point_5w_2/libero_eval_20251020_165848'
-
-    dataset = LeRobotDataset(dataset_path)
-    print(f"Number of episodes selected: {dataset.num_episodes}")
-    print(f"Number of frames selected: {dataset.num_frames}")
-
-    total_episodes = dataset.num_episodes
-    print(f'total_episodes {total_episodes}')
+    img_range, lang_range, state_range, box_range, depth_range, point_range = ranges
     
-    os.makedirs(args.video_out_path, exist_ok=True)
-     
-    for episode_idx in range(total_episodes):
-        # todo
-        # episode_idx = episode_idx + 1 
-        tasks = dataset.meta.episodes[episode_idx]["tasks"][0]
-        
-        # print(f"{dataset[episode_idx]['observation.state'].shape=}")  # (6, c)
-        from_idx = dataset.episode_data_index["from"][episode_idx].item()
-        to_idx = dataset.episode_data_index["to"][episode_idx].item()
-        print(f"episode idx {episode_idx}, task {tasks}, from idx {from_idx} to idx {to_idx}")
-        
-        frames = []
-        for frame_index in np.arange(from_idx, to_idx).tolist():
-            frame = dataset[frame_index]
-            bboxes = frame['bboxes']
-            # print(f"bboxes {bboxes.shape}")
-            state = frame['observation.state']
-            task_description = tasks
-            agentview_image_bbox = to_pil(frame['observation.images.image'])
-            agentview_image_bbox = np.asarray(agentview_image_bbox).copy()
-            # compose obs and send to policy
-            observation = {
-                "observation.images.image": frame['observation.images.image']
-                .to(args.device).unsqueeze(0),
-                "observation.images.wrist_image": frame['observation.images.wrist_image']
-                .to(args.device).unsqueeze(0),
-                "observation.state": state.to(args.device).unsqueeze(0),
-                "task": task_description,
-            }
-            
-            with torch.inference_mode():
-                action_result_tensor = policy.select_action(observation, need_bbox = True)
-                bbox = action_result_tensor['box']
-                
-                box0 = bbox[0, 0, :].cpu().numpy()
-                box0 = (box0 * LIBERO_ENV_RESOLUTION).astype(int)
-                box0 = box0.tolist()
-            
-                cv2.rectangle(
-                    agentview_image_bbox,
-                    (box0[0], box0[1]),
-                    (box0[0]+box0[2], box0[1]+box0[3]),
-                    (0, 255, 0),
-                    2,
-                )
-                
-                if 'point' in action_result_tensor:
-                    points = action_result_tensor['point']
-                    # first point
-                    first_point: Any = points[0, 0, :].cpu().numpy()
-                    first_point = (first_point * LIBERO_ENV_RESOLUTION).astype(int)
-                    cv2.circle(agentview_image_bbox, (first_point[0], first_point[1]), 2, (0, 0, 255), -1)
-                
-                frames.append(agentview_image_bbox)
-                
-                cv2.imwrite("/tmp/agentview_image_bbox.png", agentview_image_bbox)
-                
-                ipdb.set_trace()
-                
-                if NEED_FIRST_FRAME:
-                    print(f"early exit caused by first frame flag")
-                    sys.exit(1)
-
-        # write to video out
-        video_path = (
-            pathlib.Path(args.video_out_path) / f"rollout_task_{task_id}_episode_{episode_idx}.mp4"
-        )
-        fps = 20
-        writer = imageio.get_writer(video_path, fps=fps)
-        for frame in frames:
-            writer.append_data(frame)
-        writer.close()
-        logger.info(f"Saved video to {video_path}") 
-
+    # extract token input embeding
+    text_token_start_index = lang_range[0]
+    input_embedings = prefix_embs[0][text_token_start_index]
+    first_token_embeding = prefix_embs[0][text_token_start_index]
+    first_token_embeding = first_token_embeding.to(dtype=torch.float32)
+    np_first_token = first_token_embeding.detach().cpu().numpy()
+    lang_emb_dim = 576
+    np_first_token = np_first_token / math.sqrt(lang_emb_dim)
+    np.save(f"{cur_dir}/smovla_first_token_embeding.npy", np_first_token)
+    
+    # 先看下 lang 和 img 的 attention score
+    for i, hidden_state in enumerate(infer_result.hidden_states):
+        print(f"Layer {i} seq_len: {hidden_state.shape[1]}")
+    atten_layer_size = len(infer_result.attentions)
+    print(f"Attention layer size: {atten_layer_size}")
+    rows, cols = calculate_plt_size(atten_layer_size)
+    output_shape = [8, 8]
+    print(f"attention shape {infer_result.attentions[0].shape}")
+    
+    # plate word
+    query_index = lang_range[0] + 2
+    # the word
+    query_index = lang_range[0] + 1
+   
+    # stove word
+    # query_index = lang_range[1] - 1
+    # query_index = -1
+    
+    # query_index = lang_range[0]
+    img_start_index = img_range[0] + 2
+    img_end_index = img_range[1] // 2  - 1 
+    
+    # box query 
+    # query_index = box_range[0]
+    fig, axes = plt.subplots(rows, cols, figsize=(10.8, 16))
+    # print(f"axes: {axes.flatten()}")
+    for i, ax in enumerate(axes.flatten()):
+        if i < atten_layer_size:
+         #  output.attentions[i][0, :, -1, pos:pos_end] shape: (num_heads, seq_len)
+            att = infer_result.attentions[i][0, :, query_index, img_start_index:img_end_index].mean(dim=0)
+            # att shape: (seq_len)
+            att = att.to(torch.float32).detach().cpu().numpy()
+            ax.imshow(
+                att.reshape(output_shape), cmap="plasma", interpolation="nearest"
+            )
+            ax.set_title(f"Layer {i+1}")
+            ax.axis("off")
+        else:
+            ax.axis("off")
+    plt.tight_layout()
+    timestamp = int(time.time() * 1000)
+    file_name = f"smovla4_attention_map_{timestamp}.png"
+    print(f'save file name {file_name}')
+    plt.savefig(file_name)
+    
 
 if __name__ == "__main__":
     replay_and_eval_bbox()

@@ -3,30 +3,11 @@ import torch
 import matplotlib.pyplot as plt
 from qwen_vl_utils import process_vision_info
 import math
+import time
+import pathlib
 
 
 def calculate_plt_size(attention_layer_num):
-    """
-    calculate_plt_size 的作用是计算绘图网格的行列数：
-
-    输入: attention_layer_num - 注意力层的总数量
-    功能: 根据层数计算出最佳的网格布局（行数和列数）
-    算法逻辑:
-    先计算总层数的平方根并向上取整作为列数
-    再根据列数计算需要多少行来容纳所有层
-    目标是创建一个尽可能接近正方形的网格布局
-    举例说明:
-
-    如果有28层注意力，√28 ≈ 5.3，向上取整得到6列
-    28层需要 ⌈28/6⌉ = 5行
-    最终得到5×6的网格来显示28个注意力热力图
-
-    Args:
-        attention_layer_num (_type_): _description_
-
-    Returns:
-        _type_: _description_
-    """
     num_layers = attention_layer_num
     cols = math.ceil(math.sqrt(num_layers))
     rows = math.ceil(num_layers / cols)
@@ -36,6 +17,7 @@ def calculate_plt_size(attention_layer_num):
 device = "cuda"
 model_path = "Qwen/Qwen2.5-VL-3B-Instruct"
 model_path = r"E:\dev\wsl\mllms_know\ckpts\Qwen\Qwen2___5-VL-3B-Instruct"
+model_path = "/root/autodl-fs/weights/Qwen/Qwen2___5-VL-3B-Instruct"
 
 model = (
     Qwen2_5_VLForConditionalGeneration.from_pretrained(
@@ -52,12 +34,21 @@ processor = AutoProcessor.from_pretrained(
 
 image_path = "./images/demo1.png"
 image_path = "./images/4_start.png"
+image_path = "/opt/product/lerobot/examples/smolvlm/4_start.png"
+cur_dir = pathlib.Path(__file__).parent.resolve()
+print(f'cur_dir is {cur_dir}')
+image_path = f"{cur_dir}/910_main.jpg"
 
 question = "what is the date of the photo?"
 
 question = "what is the color of the cabinet?"
 
 # question = "what is the color of the bottle?"
+
+question = "push the plate to the front of the stove"
+
+question = "push the bowl to the front of the stove"
+
 
 messages_query = [
     {
@@ -77,6 +68,8 @@ image_inputs, _ = process_vision_info(messages_query)
 text_query = processor.apply_chat_template(
     messages_query, tokenize=False, add_generation_prompt=True
 )
+
+print(f'text_query {text_query}')
 
 inputs = processor(
     text=[text_query],
@@ -136,20 +129,30 @@ with torch.no_grad():
     rows, cols = calculate_plt_size(atten_layer_size)
     print(f'attention shape {output.attentions[0].shape}')
     fig, axes = plt.subplots(rows, cols, figsize=(10.8, 16))
-    print(f"axes: {axes.flatten()}")
+    # print(f"axes: {axes.flatten()}")
+    text_token_start_index = pos_end + 1
+    select_text_token_idx = text_token_start_index + 2
+    select_text_token_idx = text_token_start_index + 1
+    
+    # stove token is the last one
+    # text_tokens = question.split(' ')
+    # select_text_token_idx = text_token_start_index + len(text_tokens) - 1 
+    
+    # text_id_index = -1
     for i, ax in enumerate(axes.flatten()):
         if i < atten_layer_size:
             #  output.attentions[i][0, :, -1, pos:pos_end] shape: (num_heads, seq_len)
-            att = output.attentions[i][0, :, -1, pos:pos_end].mean(dim=0)
+            att = output.attentions[i][0, :, select_text_token_idx, pos:pos_end].mean(dim=0)
             # att shape: (seq_len)
             att = att.to(torch.float32).detach().cpu().numpy()
 
-            general_att = general_output.attentions[i][0, :, -1, pos:pos_end].mean(
+            general_att = general_output.attentions[i][0, :, select_text_token_idx, pos:pos_end].mean(
                 dim=0
             )
             general_att = general_att.to(torch.float32).detach().cpu().numpy()
 
-            att = att / general_att
+            # TODO enable later
+            # att = att / general_att
 
             # seq len -> image w, h
             # ax.imshow(
@@ -163,6 +166,8 @@ with torch.no_grad():
         else:
             ax.axis("off")
 
+    
     plt.tight_layout()
-    plt.savefig("attention_map.png")
-    plt.show()
+    timestamp = int(time.time() * 1000)
+    file_name = f"{cur_dir}/qwen2_attention_map_{timestamp}.png"
+    plt.savefig(file_name)

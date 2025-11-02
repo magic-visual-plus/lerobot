@@ -103,10 +103,6 @@ class SmolVLM(nn.Module):
             self.get_vlm_model().vision_model.eval()
             for params in self.get_vlm_model().vision_model.parameters():
                 params.requires_grad = False
-                
-            # self.get_vlm_model().text_model.eval()
-            # for params in self.get_vlm_model().text_model.parameters():
-                # params.requires_grad = False
         else:
             # To avoid unused params issue with distributed training
             last_layers = [self.num_vlm_layers - 1]
@@ -153,6 +149,8 @@ class SmolVLM(nn.Module):
         attention_mask: torch.Tensor | None = None,
         position_ids: torch.LongTensor | None = None,
         inputs_embeds: torch.FloatTensor | None = None,
+        output_hidden_states=False,
+        output_attentions=False,
     ):
         if attention_mask is None:
             attention_mask = torch.ones(
@@ -185,12 +183,13 @@ class SmolVLM(nn.Module):
             position_ids=position_ids,
             inputs_embeds=inputs_embeds,
             use_cache=True,
-            output_hidden_states=False,
+            output_hidden_states=output_hidden_states,
+            output_attentions=output_attentions,
         )
         past_key_values = result.past_key_values
         out_embeds = result.last_hidden_state.to(torch.float32)
 
-        return past_key_values.to_legacy_cache(), out_embeds, result.hidden_states
+        return past_key_values.to_legacy_cache(), out_embeds, result.hidden_states, result
     
     def forward(
         self,

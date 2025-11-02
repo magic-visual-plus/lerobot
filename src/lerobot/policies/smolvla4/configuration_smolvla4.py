@@ -27,8 +27,8 @@ from lerobot.optim.schedulers import (
 class SmolVLA4Config(PreTrainedConfig):
     # Input / output structure.
     n_obs_steps: int = 1
-    chunk_size: int = 24
-    n_action_steps: int = 24
+    chunk_size: int = 10
+    n_action_steps: int = 10
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
@@ -43,7 +43,7 @@ class SmolVLA4Config(PreTrainedConfig):
         default_factory=lambda: {
             "action": 1.0,
             "point": 0,
-            "box": 0.0,
+            "box": 1,
             "depth": 0.0,
         }
     )
@@ -95,7 +95,7 @@ class SmolVLA4Config(PreTrainedConfig):
     scheduler_warmup_steps: int = 1_000
     scheduler_decay_steps: int = 40_000
     scheduler_decay_lr: float = 1e-6
-    
+
     # vlm_model_name: str = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct" 
     vlm_model_name: str = "HuggingFaceTB/SmolVLM2-256M-Video-Instruct"  # Select the VLM backbone.
     load_vlm_weights: bool = True  # Set to True in case of training the expert from scratch. True when init from pretrained SmolVLA weights

@@ -351,7 +351,8 @@ class SmolVLA4Policy(PreTrainedPolicy):
         self.unnormalize_outputs = Unnormalize(
             config.output_features, config.normalization_mapping, dataset_stats
         )
-
+        # TODO disable later
+        self.config.vlm_model_name = '/root/autodl-fs/weights/HuggingFaceTB/SmolVLM2-256M-Video-Instruct'
         self.language_tokenizer = AutoProcessor.from_pretrained(self.config.vlm_model_name).tokenizer
         self.model = VLAFlowMatching(config)
         self.reset()
@@ -512,7 +513,6 @@ class SmolVLA4Policy(PreTrainedPolicy):
 
         # For backward pass
         loss = loss_action + loss_box + loss_depth + loss_point
-
         # For backward pass
         loss_dict["loss"] = loss.item()
         loss_dict["loss_action"] = loss_action.item()
@@ -898,13 +898,14 @@ class VLAFlowMatching(nn.Module):
         self.image_end_token = torch.tensor([self.fake_image_token], dtype=torch.long)
         self.prefix_length = self.config.prefix_length
 
+    
     def disable_bbox_grad(self):
         # import ipdb; ipdb.set_trace()
         self.box_in_emb.requires_grad = False
-        self.box_out_proj.requires_grad = False
-        
+            
         for params in self.box_out_proj.parameters():
             params.requires_grad = False
+            
         
     def set_requires_grad(self):
         for params in self.state_proj.parameters():
@@ -1269,7 +1270,7 @@ class VLAFlowMatching(nn.Module):
 
         if True:
         # with torch.no_grad():
-            past_key_values, prefix_out, hidden_states = self.vlm.prepare_for_generation(
+            past_key_values, prefix_out, hidden_states, _ = self.vlm.prepare_for_generation(
                 attention_mask=attention_matrix_prefix,
                 position_ids=prefix_position_ids,
                 inputs_embeds=prefix_embs,
@@ -1282,9 +1283,8 @@ class VLAFlowMatching(nn.Module):
             pass
         
         first_box = prefix_out[:, box_range[0]:box_range[0]+1, :] # (B, 1, D)
-        action_combine = action_out + first_box
-
-        v_t = self.action_out_proj(action_combine)
+        # action_combine = action_out + first_box
+        v_t = self.action_out_proj(action_out)
 
         box_out = prefix_out[:, box_range[0]:box_range[1], :]  # (B, num_box, D)
         box_pred = self.box_out_proj(box_out)
@@ -1320,7 +1320,7 @@ class VLAFlowMatching(nn.Module):
             prefix_pad_masks, suffix_pad_masks, img_len, img_range, lang_range, state_range, box_range, depth_range, point_range
         )
 
-        past_key_values, prefix_embs, hidden_states = self.vlm.prepare_for_generation(
+        past_key_values, prefix_embs, hidden_states, _ = self.vlm.prepare_for_generation(
             attention_mask=attention_matrix_prefix,
             position_ids=prefix_position_ids,
             inputs_embeds=prefix_embs,
@@ -1400,7 +1400,8 @@ class VLAFlowMatching(nn.Module):
             past_key_values, attention_matrix_cross,
             suffix_embs, attention_matrix_suffix, suffix_position_ids,
         )
-        action_combine = action_out + box_emb
-        v_t_action = self.action_out_proj(action_combine)
+
+        # action_combine = action_out + box_emb
+        v_t_action = self.action_out_proj(action_out)
         return v_t_action
     

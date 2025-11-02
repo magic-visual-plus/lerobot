@@ -11,30 +11,10 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import math
 import numpy as np
-
+import pathlib
+import time
 
 def calculate_plt_size(attention_layer_num):
-    """
-    calculate_plt_size 的作用是计算绘图网格的行列数：
-
-    输入: attention_layer_num - 注意力层的总数量
-    功能: 根据层数计算出最佳的网格布局（行数和列数）
-    算法逻辑:
-    先计算总层数的平方根并向上取整作为列数
-    再根据列数计算需要多少行来容纳所有层
-    目标是创建一个尽可能接近正方形的网格布局
-    举例说明:
-
-    如果有28层注意力，√28 ≈ 5.3，向上取整得到6列
-    28层需要 ⌈28/6⌉ = 5行
-    最终得到5×6的网格来显示28个注意力热力图
-
-    Args:
-        attention_layer_num (_type_): _description_
-
-    Returns:
-        _type_: _description_
-    """
     num_layers = attention_layer_num
     cols = math.ceil(math.sqrt(num_layers))
     rows = math.ceil(num_layers / cols)
@@ -46,7 +26,7 @@ def load_model():
     model_name = "HuggingFaceTB/SmolVLM2-256M-Video-Instruct"
     model_name = "/home/superfun77/.cache/huggingface/hub/models--HuggingFaceTB--SmolVLM2-256M-Video-Instruct/snapshots/067788b187b95ebe7b2e040b3e4299e342e5b8fd"
     model_name = "/root/autodl-fs/weights/HuggingFaceTB/SmolVLM2-256M-Video-Instruct"
-    model_name = "/root/autodl-fs/weights/HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
+    # model_name = "/root/autodl-fs/weights/HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
     # 加载处理器和模型（指定本地目录）
     processor = AutoProcessor.from_pretrained(model_name)
     model: SmolVLMForConditionalGeneration = (
@@ -1000,11 +980,23 @@ def test_image_infer_with_attention_vis():
     image_path = "/opt/projects/voyager/data/test_pic/4_start.png"
     image_path = "/opt/product/lerobot/examples/smolvlm/4_start.png"
     # image_path = "/opt/product/lerobot/examples/smolvlm/demo1.png"
+    
+    cur_dir = pathlib.Path(__file__).parent.resolve()
+    print(f'cur_dir is {cur_dir}')
+    image_path = f"{cur_dir}/910_main.jpg"
+ 
     model, processor = load_model()
     question = "what is the date of the photo?"
     question = "what is the color of the bottle?"
     question = "what is the color of the cabinet?"
-    # question = "what is the license plate number of the gray card in the center of the photo?"
+    
+    question = "push the plate to the front of the stove"
+    
+    question = "push the bowl to the front of the stove"
+
+    question = "push the bottle to the front of the stove"
+    
+    question = "bottle the"
 
     general_messages = [
         {
@@ -1020,12 +1012,12 @@ def test_image_infer_with_attention_vis():
     ]
     messages = [
         {
-            "role": "user",
-            "content": [
+        "role": "user",
+        "content": [
                 {"type": "image", "url": image_path},
                 {
                     "type": "text",
-                    "text": f"{question} Answer the question using a single word or phrase",
+                    "text": f"{question}",
                 },
             ],
         },
@@ -1067,8 +1059,20 @@ def test_image_infer_with_attention_vis():
     split_col = 4
     pos = input_id_list.index(image_token_id) + 1
     global_img_pos = input_id_list.index(global_img_token_id) + 1
-    pos_end = len(input_id_list) - input_id_list[::-1].index(image_token_id)
+    pos_end = image_split_idxs[-1] + 1
     print(f"image_id token start {pos} end {pos_end}， global_img_pos {global_img_pos}")
+    pixel_values = inputs['pixel_values']
+    pixel_attention_mask = inputs['pixel_attention_mask']
+    # save text embeding index
+    text_token_start_index = pos_end + 1
+    input_embedings = model.model.text_model.get_input_embeddings()(input_ids).to(input_ids.device)
+    embeding_weights = model.model.text_model.get_input_embeddings().weight.to(dtype=torch.float32).detach().cpu().numpy()
+    np.save(f"{cur_dir}/smovlm_embeding_weights.npy", embeding_weights)
+    
+    first_token_embeding = input_embedings[0][text_token_start_index]
+    first_token_embeding = first_token_embeding.to(dtype=torch.float32)
+    np_first_token = first_token_embeding.detach().cpu().numpy()
+    np.save(f"{cur_dir}/smovlm_first_token_embeding.npy", np_first_token)
 
     output = model.forward(
         **inputs,
@@ -1100,8 +1104,18 @@ def test_image_infer_with_attention_vis():
         output_shape = [8 * split_row, 8 * split_col]
 
     print(f"output shape {output_shape}")
+    
+    # plate token
+    select_text_token_idx = text_token_start_index + 2
+    # put
+    # select_text_token_idx = text_token_start_index
+    
+    # stove token is the last one
+    # text_tokens = question.split(' ')
+    # select_text_token_idx = text_token_start_index + len(text_tokens) - 1 
 
     fig, axes = plt.subplots(rows, cols, figsize=(10.8, 16))
+    text_id_index = pos_end + 1
     for i, ax in enumerate(axes.flatten()):
         if i < atten_layer_size:
             """
@@ -1113,9 +1127,9 @@ def test_image_infer_with_attention_vis():
             print(f"head attention weight shape {output.attentions[i][0, :, -1].shape}")
             #  output.attentions[i][0, :, -1, pos:pos_end] shape: (num_heads, seq_len)
             if vis_gobal_image_att:
-                att = output.attentions[i][0, :, -1, global_img_pos:pos_end].mean(dim=0)
+                att = output.attentions[i][0, :, select_text_token_idx, global_img_pos:pos_end].mean(dim=0)
                 general_att = general_output.attentions[i][
-                    0, :, -1, global_img_pos:pos_end
+                    0, :, select_text_token_idx, global_img_pos:pos_end
                 ].mean(dim=0)
             else:
                 att = get_split_image_attention(
@@ -1133,14 +1147,16 @@ def test_image_infer_with_attention_vis():
             # att shape: (seq_len)
             att = att.to(torch.float32).detach().cpu().numpy()
             general_att = general_att.to(torch.float32).detach().cpu().numpy()
-            att = att / general_att
+            # att = att / general_att
             ax.imshow(att.reshape(output_shape), cmap="plasma", interpolation="nearest")
             ax.set_title(f"Layer {i+1}")
             ax.axis("off")
         else:
             ax.axis("off")
     plt.tight_layout()
-    plt.savefig("attention_map.png")
+    timestamp = int(time.time() * 1000)
+    file_name = f"{cur_dir}/smovlm_attention_map_{timestamp}.png"
+    plt.savefig(file_name)
     plt.show()
 
 
