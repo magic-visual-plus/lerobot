@@ -175,3 +175,4 @@ outputs/
 .cache/*
 nohup.out
 *.mp4
+*.png
