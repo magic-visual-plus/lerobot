@@ -352,7 +352,7 @@ class SmolVLA4Policy(PreTrainedPolicy):
             config.output_features, config.normalization_mapping, dataset_stats
         )
         # TODO disable later
-        self.config.vlm_model_name = '/root/autodl-fs/weights/HuggingFaceTB/SmolVLM2-256M-Video-Instruct'
+        # self.config.vlm_model_name = '/root/autodl-fs/weights/HuggingFaceTB/SmolVLM2-256M-Video-Instruct'
         self.language_tokenizer = AutoProcessor.from_pretrained(self.config.vlm_model_name).tokenizer
         self.model = VLAFlowMatching(config)
         self.reset()
@@ -402,7 +402,7 @@ class SmolVLA4Policy(PreTrainedPolicy):
 
         actions = self.model.sample_actions(images, img_masks, lang_tokens, lang_masks, state, noise=noise)
         # unpack to actions and boxes
-        actions, boxes, depth_imag, points = actions
+        actions, boxes, depth_image, points = actions
         
         # Unpad actions
         original_action_dim = self.config.action_feature.shape[0]
@@ -481,13 +481,14 @@ class SmolVLA4Policy(PreTrainedPolicy):
         lang_tokens, lang_masks = self.prepare_language(batch)
         actions = self.prepare_action(batch)
         actions_is_pad = batch.get("actions_id_pad")
-
-        boxes, box_masks, points, point_masks = self.prepare_box_and_point(batch)
+        
+        point_3d, point_3d_masks = self.prepare_point_3d(batch)
+        boxes, box_masks, _, _ = self.prepare_box_and_point(batch)
         depth_image = self.prepare_depth(batch)
 
         loss_dict = {}
         loss_action, loss_box, loss_depth, loss_point = self.model.forward(
-            images, img_masks, lang_tokens, lang_masks, state, actions, boxes, box_masks, depth_image, points, point_masks)
+            images, img_masks, lang_tokens, lang_masks, state, actions, boxes, box_masks, depth_image, point_3d, point_3d_masks)
         loss_dict["losses_after_forward"] = loss_action.clone()
 
         if actions_is_pad is not None:
@@ -504,8 +505,8 @@ class SmolVLA4Policy(PreTrainedPolicy):
         loss_box = loss_box.reshape(loss_box.shape[0], -1).sum(dim=-1) / (box_masks.sum(dim=-1) + 1e-8)
         loss_box = loss_box.mean()
         
-        loss_point = loss_point * point_masks.unsqueeze(-1)
-        loss_point = loss_point.reshape(loss_point.shape[0], -1).sum(dim=-1) / (point_masks.sum(dim=-1) + 1e-8)
+        loss_point = loss_point * point_3d_masks.unsqueeze(-1)
+        loss_point = loss_point.reshape(loss_point.shape[0], -1).sum(dim=-1) / (point_3d_masks.sum(dim=-1) + 1e-8)
         loss_point = loss_point.mean()
         
 
@@ -634,6 +635,36 @@ class SmolVLA4Policy(PreTrainedPolicy):
         """Pad action"""
         actions = pad_vector(batch[ACTION], self.config.max_action_dim)
         return actions
+    
+    def prepare_point_3d(self, batch):
+        if 'observation.objects_com' in batch:
+            x = batch['observation.objects_com']
+            if len(x.shape) == 4:
+                x = x.squeeze(dim=1)
+            # 取出第2列（索引1）
+            # import ipdb; ipdb.set_trace();
+            key = x[:, :, 1]  # shape = (48, 10)
+            key = torch.where(key < 0, torch.tensor(100.0, device=x.device), key)
+            # 在第1维 (dim=1, size=10) 上排序
+            _, idx = torch.sort(key, dim=1)
+            # 利用 idx 对第二个维度（dim=1）排序整个 x
+            points = torch.gather(x, 1, idx.unsqueeze(-1).expand(-1, -1, x.size(2)))
+            # import ipdb; ipdb.set_trace();
+            max_num_points = self.config.max_num_point_3d
+            point_tensor = torch.zeros(
+                (points.shape[0], max_num_points, 3), device=points.device
+            )
+            point_tensor[:, : points.shape[1], :] = points[:, : max_num_points, -3:]
+            # box_masks = boxes_tensor.sum(dim=-1) > 1e-8
+            point_masks = (points[:, :, 1] == 0) | (points[:, :, 1] == 1) | (points[:, :, 1] == 2)
+            return point_tensor, point_masks
+        else:
+            bsize = batch[OBS_STATE].shape[0]
+            device = batch[OBS_STATE].device
+            point_tensor = torch.zeros((bsize, self.config.max_num_point_3d, 3), device=device)
+            point_masks = torch.zeros((bsize, self.config.max_num_point_3d), dtype=torch.bool, device=device)
+            return point_tensor, point_masks
+
     
     def prepare_box_and_point(self, batch):
         if "bboxes" in batch:
@@ -856,10 +887,10 @@ class VLAFlowMatching(nn.Module):
         nn.init.normal_(self.box_in_emb, std=0.02)
         
         self.point_in_emb = nn.Parameter(
-            torch.zeros(1, self.config.max_num_embeddings_box, self.vlm.config.text_config.hidden_size)
+            torch.zeros(1, self.config.max_num_point_3d, self.vlm.config.text_config.hidden_size)
         )
         nn.init.normal_(self.point_in_emb, std=0.02)
-        
+    
         self.depth_in_emb = nn.Parameter(
             torch.zeros(1, self.config.max_num_embeddings_depth, self.vlm.config.text_config.hidden_size)
         )
@@ -877,7 +908,7 @@ class VLAFlowMatching(nn.Module):
         )
         self.point_out_proj = OutputProjectionMLP(
             input_dim=self.vlm.config.text_config.hidden_size,
-            output_dim=2,
+            output_dim=3,
             hidden_dim=self.vlm.config.text_config.hidden_size,
         )
         self.depth_image_out_proj = DepthImageDecoder(
@@ -1297,6 +1328,7 @@ class VLAFlowMatching(nn.Module):
         loss_box = F.mse_loss(boxes, box_pred, reduction="none") * self.config.loss_weights["box"]
         loss_depth = F.mse_loss(depth_image, depth_pred, reduction="none") * self.config.loss_weights["depth"]
         loss_point = F.mse_loss(points, point_pred, reduction="none") * self.config.loss_weights["point"]
+        print(f'point pred {point_pred[0]}, point expect {points[0]}')
         
         return loss_action, loss_box, loss_depth, loss_point
 

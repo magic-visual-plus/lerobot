@@ -459,6 +459,8 @@ def dataset_to_policy_features(features: dict[str, dict]) -> dict[str, PolicyFea
             type = FeatureType.ENV
         elif key == "bboxes":
             type = FeatureType.ENV
+        elif key == "observation.objects_com":
+            type = FeatureType.ENV
         elif key.startswith("observation"):
             type = FeatureType.STATE
         elif key.startswith("action"):
