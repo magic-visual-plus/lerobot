@@ -176,3 +176,8 @@ outputs/
 nohup.out
 *.mp4
 *.png
+*.jpg
+*.gif
+*.pdf
+*.mp3
+*.npy
