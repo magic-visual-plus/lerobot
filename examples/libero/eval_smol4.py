@@ -14,6 +14,9 @@ from sys import version
 import time
 from typing import Any
 from loguru import logger
+from numpy._core.numeric import True_
+from eval_save import LeRobotEvalSave
+
 # use huggingface mirror
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 # os.environ["MUJOCO_GL"] = "egl"
@@ -44,9 +47,11 @@ LIBERO_DUMMY_ACTION = [0.0] * 6 + [-1.0]
 
 LIBERO_ENV_RESOLUTION = 256  # resolution used to render training data
 
-NEED_RAND_POS = False
-POS_LEVEL = 2
+NEED_RAND_POS = True
+# NEED_RAND_POS = False
+POS_LEVEL = 1
 NEED_BBOX = False
+NEED_POINT = False
 NEED_RAND_CAM = False
 
 DISABLE_STATE = False
@@ -57,8 +62,10 @@ DISABLE_PROMPT = False
 NEED_FIRST_FRAME = False
 
 # EVAL_TASK_ID = 8
-EVAL_TASK_ID = 0
+EVAL_TASK_ID = 5
 # EVAL_TASK_ID = 7
+
+SAVE_DATASET = False
 
 BLACK_GRIPPER = False
 Gripper_ID_DICT: dict[str, int] = {"libero_goal" : 10}
@@ -101,7 +108,7 @@ class Args:
 
     # --- Hugging Face arguments ---
     # policy_path: str = "lerobot/smolvla_base"
-    policy_path: str = "/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/20251016/libero_smolvla4_1016_new_goal_autodl_bbox_no_wrist_imag/pretrained_model_7w"
+    policy_path: str = "/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/20251019/new_goal_autodl_add_point/pretrained_model_5w"
     """Path to the pretrained policy on the Hugging Face Hub or local directory."""
 
     # --- LIBERO environment-specific parameters ---
@@ -113,7 +120,7 @@ class Args:
     """Number of rollouts per task."""
 
     # --- Evaluation arguments ---
-    video_out_path: str = "data/libero/videos"
+    video_out_path: str = "data/libero/1019/new_goal_autodl_add_point_5w"
     """Path to save videos."""
     device: str = "cuda"
     """Device to use for evaluation."""
@@ -141,7 +148,7 @@ def init_policy(args: Args ):
         policy: PreTrainedPolicy = policy.module
      
     print(f'n_action_steps:{policy.config.n_action_steps}')
-    # policy.config.n_action_steps = 8
+    policy.config.n_action_steps = 8
     print(f'after reset n_action_steps:{policy.config.n_action_steps}')
     policy.to(args.device)
     policy.eval()
@@ -187,7 +194,11 @@ def eval_libero(args: Args) -> None:
 
     gripper_id = Gripper_ID_DICT[args.task_suite_name]
     print(f'gripper id {gripper_id}')
-
+    
+    eval_saver: LeRobotEvalSave = None
+    if SAVE_DATASET:
+        eval_saver: LeRobotEvalSave = LeRobotEvalSave(args.task_suite_name, base_path = args.video_out_path)
+    
     # --- Evaluation Loop ---
     total_episodes, total_successes = 0, 0
     # TODO disable later
@@ -199,6 +210,9 @@ def eval_libero(args: Args) -> None:
         # Get task
         task = task_suite.get_task(task_id)
 
+        if SAVE_DATASET:
+            eval_saver.init_episodes(task.name)
+            
         # Get default LIBERO initial states
         initial_states = task_suite.get_task_init_states(task_id)
 
@@ -266,6 +280,9 @@ def eval_libero(args: Args) -> None:
                 elif POS_LEVEL == 2:
                     x_offset = np.random.uniform(0.03, 0.1)
                     y_offset = np.random.uniform(0.03, 0.1)
+                elif POS_LEVEL == 3:
+                    x_offset = np.random.uniform(-0.05, 0.05)
+                    y_offset = np.random.uniform(-0.05, 0.05)
                 else:
                     x_offset = np.random.uniform(0.03, 0.05)
                     y_offset = np.random.uniform(0.03, 0.25)
@@ -370,10 +387,11 @@ def eval_libero(args: Args) -> None:
                     # Query model to get action
                     with torch.inference_mode():
                         start = time.time()
-                        action_tensor = policy.select_action(observation, need_bbox=NEED_BBOX)
+                        action_result_tensor = policy.select_action(observation, need_bbox = NEED_BBOX)
                         if NEED_BBOX:
-                            bbox = action_tensor['box']
-                            action_tensor = action_tensor['action']
+                            frames.pop()
+                            bbox = action_result_tensor['box']
+                            action_tensor = action_result_tensor['action']
                             # logging.info(f"action_tensor {action_tensor}")
                             # draw box
                             box0 = bbox[0, 0, :].cpu().numpy()
@@ -385,9 +403,15 @@ def eval_libero(args: Args) -> None:
                                 (0, 255, 0),
                                 2,
                             )
+                            if NEED_POINT:
+                                points = action_result_tensor['point']
+                                # first point
+                                first_point: Any = points[0, 0, :].cpu().numpy()
+                                first_point = (first_point * LIBERO_ENV_RESOLUTION).astype(int)
+                                cv2.circle(agentview_image_bbox, (first_point[0], first_point[1]), 2, (0, 0, 255), -1)
                             frames.append(agentview_image_bbox)    
                         else:
-                            ...
+                            action_tensor = action_result_tensor
                             # logging.info(f"action_tensor {action_tensor}")
                         if NEED_FIRST_FRAME:
                             cv2.imwrite("test_smolv4.png", agentview_image_bbox)
@@ -402,6 +426,8 @@ def eval_libero(args: Args) -> None:
                     action = normalize_gripper_action(action, binarize=False)
                     action = invert_gripper_action(action)
 
+                    if SAVE_DATASET:
+                        eval_saver.process_obs(obs, action)
                     # Execute action in environment
                     obs, _, done, _ = env.step(action)
                     # print(f"step {t}, state {state} . done status {done}")
@@ -418,6 +444,15 @@ def eval_libero(args: Args) -> None:
             task_episodes += 1
             total_episodes += 1
 
+            # if done:
+                # if SAVE_DATASET:
+                    # eval_saver.clear()
+            # else:
+            if SAVE_DATASET:
+                if done:
+                    eval_saver.save_episode(task_description)
+                else:
+                    eval_saver.clear()
             # Save a replay video of the episode
             suffix = "success" if done else "failure"
             task_segment = task_description.replace(" ", "_").replace("/", "_")

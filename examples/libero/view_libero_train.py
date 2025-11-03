@@ -14,6 +14,8 @@ from torchvision import transforms
 to_pil = transforms.ToPILImage()
 
 dataset_path = '/opt/projects/openpi/datasets/aopolin-lv/libero_goal_no_noops_lerobot_v21'
+dataset_path = "/opt/projects/news/lerobot/data/10.13/libero_goal_single_task5_with_com1"
+
 dataset = LeRobotDataset(dataset_path)
 ds_meta = LeRobotDatasetMetadata(dataset_path)
 
@@ -49,6 +51,5 @@ for episode_idx in range(total_episodes):
         
 
 print(f'select_episode_idx {select_episode_idx}')
-        
         
         

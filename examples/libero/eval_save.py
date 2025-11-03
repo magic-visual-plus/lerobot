@@ -10,7 +10,8 @@ import math
 from lerobot.policies.pretrained import PreTrainedPolicy
 import dataclasses
 
-LIBERO_FEATURES = {
+# add com
+LIBERO_FEATURES_V2 = {
     "observation.images.image": {
         "dtype": "video",
         "shape": (256, 256, 3),
@@ -84,6 +85,11 @@ LIBERO_FEATURES = {
         "shape": (200,),
         "names": None
     },
+    "observation.objects_com": {
+        "dtype": "float32",
+        "shape": (10, 5),
+        "names": None
+    },
     # "observation.states.gripper_state": {
     #     "dtype": "float32",
     #     "shape": (2,),
@@ -103,6 +109,109 @@ LIBERO_FEATURES = {
         "dtype": "float32",
         "shape": (10, 6),
         "names": {"motors": ["class", "x", "y", "w", "h"]},
+    },
+    "timestamp": {
+        "dtype": "float32",
+        "shape": [
+            1
+        ],
+        "names": None
+    },
+}
+
+LIBERO_FEATURES = {
+    "observation.images.image": {
+        "dtype": "video",
+        "shape": (256, 256, 3),
+        "names": ["height", "width", "rgb"],
+        "fps": 20,
+        "info": {
+            "video.height": 256,
+            "video.width": 256,
+            "video.codec": "av1",
+            "video.pix_fmt": "yuv420p",
+            "video.is_depth_map": False,
+            "video.fps": 20,
+            "video.channels": 3,
+            "has_audio": False
+        }
+    },
+    "observation.images.depth": {
+        "dtype": "video",
+        "shape": [256, 256, 3],
+        "names": ["height", "width", "rgb"],
+    },
+    "observation.images.segmentation": {
+        "dtype": "video",
+        "shape": [256, 256, 3],
+        "names": ["height", "width", "rgb"],
+    },
+    "observation.images.wrist_image": {
+        "dtype": "video",
+        "shape": (256, 256, 3),
+        "names": ["height", "width", "rgb"],
+    },
+    "observation.images.wrist_depth": {
+        "dtype": "video",
+        "shape": [256, 256, 3],
+        "names": ["height", "width", "rgb"],
+    },
+    "observation.images.wrist_segmentation": {
+        "dtype": "video",
+        "shape": [256, 256, 3],
+        "names": ["height", "width", "rgb"],
+    },
+    "observation.state": {
+        "dtype": "float32",
+        "shape": (8,),
+        "names": {
+            "motors": ["x", "y", "z", "roll", "pitch", "yaw", "gripper", "gripper"]
+        },
+    },
+    "observation.states.ee_state": {
+        "dtype": "float32",
+        "shape": (6,),
+        "names": {"motors": ["x", "y", "z", "roll", "pitch", "yaw"]},
+    },
+    "observation.states.joint_state": {
+        "dtype": "float32",
+        "shape": (7,),
+        "names": {
+            "motors": [
+                "joint_0",
+                "joint_1",
+                "joint_2",
+                "joint_3",
+                "joint_4",
+                "joint_5",
+                "joint_6",
+            ]
+        },
+    },
+    "observation.mj_state": {
+        "dtype": "float32",
+        "shape": (200,),
+        "names": None
+    },
+    "observation.states.gripper_state": {
+        "dtype": "float32",
+        "shape": (2,),
+        "names": {"motors": ["gripper", "gripper"]},
+    },
+    "action": {
+        "dtype": "float32",
+        "shape": (7,),
+        "names": {"motors": ["x", "y", "z", "roll", "pitch", "yaw", "gripper"]},
+    },
+    "bboxes": {
+        "dtype": "float32",
+        "shape": (10, 6),
+        "names": {"motors": ["class", "op_class","x", "y", "w", "h"]},
+    },
+    "wrist_bboxes": {
+        "dtype": "float32",
+        "shape": (10, 6),
+        "names": {"motors": ["class", "op_class","x", "y", "w", "h"]},
     },
     "timestamp": {
         "dtype": "float32",

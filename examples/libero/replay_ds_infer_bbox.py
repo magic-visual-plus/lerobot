@@ -11,6 +11,8 @@ import sys
 import torch
 import pathlib
 import os
+
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 import ipdb
 
 from torchvision import transforms
@@ -53,7 +55,13 @@ class Args:
     # freeze vision encoder
     # policy_path: str = '/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/1023/libero_smolvla4_1023_goal_autodl_disable_bbox_emb_vit_encoder_action/pretrained_model_5k'
     
-    policy_path: str = '/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/1023/libero_smolvla4_1023_goal_autodl_disable_bbox_emb_vit_encoder_action/pretrained_model_2w'
+    # policy_path: str = '/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/1023/libero_smolvla4_1023_goal_autodl_disable_bbox_emb_vit_encoder_action/pretrained_model_2w'
+    
+    # also freeze backbone,(text model)
+    # policy_path: str = '/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/1023/libero_smolvla4_1023_goal_autodl_disable_bbox_emb_vit_encoder_text_action/pretrained_model_2w'
+    
+    # remove bbox mlp action
+    policy_path: str = '/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/1023/disable_bbox_emb_vit_encoder_bbox_mlp/pretrained_model_2w'
     # adj weight
     #  policy_path:str ='/opt/projects/xbkaishui/lerobot/ckpts/smol4/goal/1022/libero_smolvla4_1022_goal_autodl_action_pretrain_bbox_aj_weight/pretrained_model_3w'
 
@@ -67,7 +75,9 @@ class Args:
 
     # --- Evaluation arguments ---
     # video_out_path: str = "/opt/projects/xbkaishui/lerobot/data/libero/1022/disable_bbox_emb_2w"
-    video_out_path: str = "/opt/projects/xbkaishui/lerobot/data/libero/1023/disable_bbox_emb_vit_encoder_action_2w"
+    # video_out_path: str = "/opt/projects/xbkaishui/lerobot/data/libero/1023/disable_bbox_emb_vit_encoder_action_2w"
+    # video_out_path: str = "/opt/projects/xbkaishui/lerobot/data/libero/1023/disable_bbox_emb_vit_encoder_text_action_2w"
+    video_out_path: str = "/opt/projects/xbkaishui/lerobot/data/libero/1023/disable_bbox_emb_vit_encoder_bbox_mlp_2w"
     """Path to save videos."""
     device: str = "cuda"
     """Device to use for evaluation."""

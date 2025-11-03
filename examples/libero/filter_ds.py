@@ -15,7 +15,7 @@ import cv2
 import shutil
 from torchvision import transforms
 
-from eval_save import LIBERO_FEATURES
+from eval_save import LIBERO_FEATURES, LIBERO_FEATURES_V2
 
 """
 過濾原來的數據集，抽取特定的數據
@@ -24,9 +24,14 @@ from eval_save import LIBERO_FEATURES
 to_pil = transforms.ToPILImage()
 
 # dataset_path = "/opt/projects/news/lerobot/data/10.13/merged_goal_eval_add3"
-dataset_path = "/opt/projects/news/lerobot/data/10.13/libero_goal_no_lerobot_0"
 # new_ds_path = "/opt/projects/news/lerobot/data/10.13/goal_single_task_5_ds"
+dataset_path = "/opt/projects/news/lerobot/data/10.13/libero_goal_no_lerobot_0"
 new_ds_path = "/opt/projects/news/lerobot/data/10.13/goal_single_task_5_ds_origin"
+
+# add com function
+dataset_path = "/opt/projects/news/lerobot/data/libero_goal_no_lerobot_with_com1"
+new_ds_path = "/opt/projects/news/lerobot/data/10.13/libero_goal_single_task5_with_com1"
+
 
 logger.info("clean new ds {}", new_ds_path)
 shutil.rmtree(new_ds_path, ignore_errors=True)
@@ -36,7 +41,8 @@ new_dataset = LeRobotDataset.create(
     root=new_ds_path,
     fps=20,
     robot_type="franka",
-    features=LIBERO_FEATURES,
+    # features=LIBERO_FEATURES,
+    features=LIBERO_FEATURES_V2,
 )
 
 def convert_tensor_to_numpy(image_tensor):

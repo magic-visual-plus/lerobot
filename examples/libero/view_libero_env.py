@@ -16,6 +16,7 @@ import pathlib
 import time
 from typing import Any
 import cv2
+import mujoco
 
 from libero.libero import benchmark, get_libero_path
 from libero.libero.envs import OffScreenRenderEnv
@@ -29,7 +30,7 @@ from scipy.spatial.transform import Rotation as R
 LIBERO_ENV_RESOLUTION = 256
 LIBERO_DUMMY_ACTION = [0.0] * 6 + [-1.0]
 # LIBERO_DUMMY_ACTION = [0.5, 0.5, -0.46, 0.0, 0.0, 0.0, -1.0]
-LIBERO_DUMMY_ACTION = [1, 1.5, -0.46, 0.0, 0.0, 0.0, -1.0]
+# LIBERO_DUMMY_ACTION = [1, 1.5, -0.46, 0.0, 0.0, 0.0, -1.0]
 
 
 
@@ -94,6 +95,27 @@ def view_libero_env() -> None:
     env.reset()
     # Set initial states
     obs = env.set_init_state(initial_states[episode_idx])
+    model = env.env.sim.model
+    data = env.env.sim.data
+    # list all bodys
+    nbody = model.nbody
+    for i in range(nbody):
+        name = mujoco.mj_id2name(model._model, mujoco.mjtObj.mjOBJ_BODY.value, i)
+        print(f"ID {i}: {name}")
+        
+    
+    print("Number of cameras:", model.ncam)
+    # list all cameras
+    for cam_id in range(model.ncam):
+        name = mujoco.mj_id2name(model._model, mujoco.mjtObj.mjOBJ_CAMERA.value, cam_id)
+        print(f"Camera {cam_id}: {name}")
+        print("  Attached to body:", mujoco.mj_id2name(model._model, mujoco.mjtObj.mjOBJ_BODY, model.cam_bodyid[cam_id]))
+        print("  fovy:", model.cam_fovy[cam_id])
+        print("  pos (model):", model.cam_pos[cam_id])
+        print("  quat (model):", model.cam_quat[cam_id])
+        print("  pos (world):", data.cam_xpos[cam_id])
+        print("  orientation (world):\n", data.cam_xmat[cam_id].reshape(3, 3))
+
     # and we need to wait for them to fall
     for _ in range(20):
         obs, _, _, _ = env.step(LIBERO_DUMMY_ACTION)
