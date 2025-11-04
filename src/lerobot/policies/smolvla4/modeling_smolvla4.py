@@ -56,6 +56,7 @@ import math
 import os
 import re
 from collections import deque
+from torch._tensor import Tensor
 
 import safetensors
 import torch
@@ -326,7 +327,7 @@ class SmolVLA4Policy(PreTrainedPolicy):
     """Wrapper class around VLAFlowMatching model to train and run inference within LeRobot."""
 
     config_class = SmolVLA4Config
-    name = "smolvla3"
+    name = "smolvla4"
 
     def __init__(
         self,
@@ -352,6 +353,7 @@ class SmolVLA4Policy(PreTrainedPolicy):
             config.output_features, config.normalization_mapping, dataset_stats
         )
         # TODO disable later
+        self.config.vlm_model_name = '/home/superfun77/.cache/huggingface/hub/models--HuggingFaceTB--SmolVLM2-256M-Video-Instruct/snapshots/067788b187b95ebe7b2e040b3e4299e342e5b8fd'
         # self.config.vlm_model_name = '/root/autodl-fs/weights/HuggingFaceTB/SmolVLM2-256M-Video-Instruct'
         self.language_tokenizer = AutoProcessor.from_pretrained(self.config.vlm_model_name).tokenizer
         self.model = VLAFlowMatching(config)
@@ -464,7 +466,7 @@ class SmolVLA4Policy(PreTrainedPolicy):
                 "action": self._queues[ACTION].popleft(),
                 "box": boxes,
                 "depth_image": depth_image,
-                "points": points
+                "point": points
             }
         else:
             return self._queues[ACTION].popleft()
@@ -481,14 +483,13 @@ class SmolVLA4Policy(PreTrainedPolicy):
         lang_tokens, lang_masks = self.prepare_language(batch)
         actions = self.prepare_action(batch)
         actions_is_pad = batch.get("actions_id_pad")
-        
-        point_3d, point_3d_masks = self.prepare_point_3d(batch)
-        boxes, box_masks, _, _ = self.prepare_box_and_point(batch)
+
+        boxes, box_masks, points, point_masks = self.prepare_box_and_point(batch)
         depth_image = self.prepare_depth(batch)
 
         loss_dict = {}
         loss_action, loss_box, loss_depth, loss_point = self.model.forward(
-            images, img_masks, lang_tokens, lang_masks, state, actions, boxes, box_masks, depth_image, point_3d, point_3d_masks)
+            images, img_masks, lang_tokens, lang_masks, state, actions, boxes, box_masks, depth_image, points, point_masks)
         loss_dict["losses_after_forward"] = loss_action.clone()
 
         if actions_is_pad is not None:
@@ -505,8 +506,8 @@ class SmolVLA4Policy(PreTrainedPolicy):
         loss_box = loss_box.reshape(loss_box.shape[0], -1).sum(dim=-1) / (box_masks.sum(dim=-1) + 1e-8)
         loss_box = loss_box.mean()
         
-        loss_point = loss_point * point_3d_masks.unsqueeze(-1)
-        loss_point = loss_point.reshape(loss_point.shape[0], -1).sum(dim=-1) / (point_3d_masks.sum(dim=-1) + 1e-8)
+        loss_point = loss_point * point_masks.unsqueeze(-1)
+        loss_point = loss_point.reshape(loss_point.shape[0], -1).sum(dim=-1) / (point_masks.sum(dim=-1) + 1e-8)
         loss_point = loss_point.mean()
         
 
@@ -636,36 +637,6 @@ class SmolVLA4Policy(PreTrainedPolicy):
         actions = pad_vector(batch[ACTION], self.config.max_action_dim)
         return actions
     
-    def prepare_point_3d(self, batch):
-        if 'observation.objects_com' in batch:
-            x = batch['observation.objects_com']
-            if len(x.shape) == 4:
-                x = x.squeeze(dim=1)
-            # 取出第2列（索引1）
-            # import ipdb; ipdb.set_trace();
-            key = x[:, :, 1]  # shape = (48, 10)
-            key = torch.where(key < 0, torch.tensor(100.0, device=x.device), key)
-            # 在第1维 (dim=1, size=10) 上排序
-            _, idx = torch.sort(key, dim=1)
-            # 利用 idx 对第二个维度（dim=1）排序整个 x
-            points = torch.gather(x, 1, idx.unsqueeze(-1).expand(-1, -1, x.size(2)))
-            # import ipdb; ipdb.set_trace();
-            max_num_points = self.config.max_num_point_3d
-            point_tensor = torch.zeros(
-                (points.shape[0], max_num_points, 3), device=points.device
-            )
-            point_tensor[:, : points.shape[1], :] = points[:, : max_num_points, -3:]
-            # box_masks = boxes_tensor.sum(dim=-1) > 1e-8
-            point_masks = (points[:, :, 1] == 0) | (points[:, :, 1] == 1) | (points[:, :, 1] == 2)
-            return point_tensor, point_masks
-        else:
-            bsize = batch[OBS_STATE].shape[0]
-            device = batch[OBS_STATE].device
-            point_tensor = torch.zeros((bsize, self.config.max_num_point_3d, 3), device=device)
-            point_masks = torch.zeros((bsize, self.config.max_num_point_3d), dtype=torch.bool, device=device)
-            return point_tensor, point_masks
-
-    
     def prepare_box_and_point(self, batch):
         if "bboxes" in batch:
             x = batch['bboxes']
@@ -684,7 +655,7 @@ class SmolVLA4Policy(PreTrainedPolicy):
             )
             boxes_tensor[:, : boxes.shape[1], :] = boxes[:, : max_num_boxes, -4:]
             # box_masks = boxes_tensor.sum(dim=-1) > 1e-8
-            box_masks = boxes[:, :, 1] == 0
+            box_masks = (boxes[:, :, 1] == 0) | (boxes[:, :, 1] == 1)
             # import ipdb; ipdb.set_trace()
             # Calculate center points from box coordinates (class, x, y, w, h)
             # Extract x, y, w, h and compute center points (cx, cy)
@@ -696,7 +667,8 @@ class SmolVLA4Policy(PreTrainedPolicy):
             # Calculate center points: cx = x + w/2, cy = y + h/2
             point_tensor[:, :, 0] = box_coords[:, :, 0] + box_coords[:, :, 2] / 2  # cx = x + w/2
             point_tensor[:, :, 1] = box_coords[:, :, 1] + box_coords[:, :, 3] / 2  # cy = y + h/2
-            point_masks = boxes[:, :, 1] == 0
+            
+            point_masks =  (boxes[:, :, 1] == 0) | (boxes[:, :, 1] == 1)
             return boxes_tensor, box_masks, point_tensor, point_masks
         else:
             bsize = batch[OBS_STATE].shape[0]
@@ -887,10 +859,10 @@ class VLAFlowMatching(nn.Module):
         nn.init.normal_(self.box_in_emb, std=0.02)
         
         self.point_in_emb = nn.Parameter(
-            torch.zeros(1, self.config.max_num_point_3d, self.vlm.config.text_config.hidden_size)
+            torch.zeros(1, self.config.max_num_embeddings_box, self.vlm.config.text_config.hidden_size)
         )
         nn.init.normal_(self.point_in_emb, std=0.02)
-    
+        
         self.depth_in_emb = nn.Parameter(
             torch.zeros(1, self.config.max_num_embeddings_depth, self.vlm.config.text_config.hidden_size)
         )
@@ -908,7 +880,7 @@ class VLAFlowMatching(nn.Module):
         )
         self.point_out_proj = OutputProjectionMLP(
             input_dim=self.vlm.config.text_config.hidden_size,
-            output_dim=3,
+            output_dim=2,
             hidden_dim=self.vlm.config.text_config.hidden_size,
         )
         self.depth_image_out_proj = DepthImageDecoder(
@@ -1178,16 +1150,18 @@ class VLAFlowMatching(nn.Module):
         attention_mask_cross = attention_mask_cross
         attention_mask_self = attention_mask_suffix
 
-        suffix_outs = self.vlm.forward(
+        suffix_outs, result = self.vlm.forward(
             attention_mask_cross=attention_mask_cross,
             attention_mask_self=attention_mask_self,
             position_ids=suffix_position_ids,
             inputs_embeds=suffix_embs,
             past_key_values=past_key_values,
             use_cache=True,
+            output_attentions=True,
+            output_hidden_states=True,
         )
 
-        return suffix_outs
+        return suffix_outs, result
        
     def generate_attention_matrix(
             self, prefix_pad_masks, suffix_pad_masks, img_len, img_range, lang_range, state_range, box_range, depth_range, point_range):
@@ -1255,16 +1229,33 @@ class VLAFlowMatching(nn.Module):
         if suffix_pad_masks is not None:
             # cross attention: suffix can attend to all prefix tokens
             attention_matrix_cross[:, :, :] = True
-
+            # disable depth attention
+            attention_matrix_cross[:, :, depth_range[0]:depth_range[1]] = False
+            # disable point attention
+            attention_matrix_cross[:, :, point_range[0]:point_range[1]] = False
+            # disable depth attention
+            attention_matrix_cross[:, :, lang_range[0]:lang_range[1]] = False
+            # only attention to first box
+            attention_matrix_cross[:, :, box_range[0]+1:box_range[1]] = False
             # suffix attention: full attention within suffix
             attention_matrix_suffix[:, :, :] = True
         else:
             attention_matrix_cross = None
             attention_matrix_suffix = None
             pass
-
+        
+        attention_matrix_prefix = self.add_attention_mask_bias(attention_matrix_prefix)
+        attention_matrix_cross = self.add_attention_mask_bias(attention_matrix_cross)
+        attention_matrix_suffix = self.add_attention_mask_bias(attention_matrix_suffix)
         return attention_matrix_prefix, attention_matrix_cross, attention_matrix_suffix
 
+    def add_attention_mask_bias(self, attention_mask, dtype=torch.bfloat16):
+        if attention_mask is None:
+            return None
+        attention_mask_bias = torch.zeros_like(attention_mask, dtype=torch.bfloat16)
+        attention_mask_bias.masked_fill_(attention_mask.logical_not(), float("-inf"))
+        return attention_mask_bias
+        
 
     def forward(
         self, images, img_masks, lang_tokens, lang_masks, state, actions, boxes, box_masks, depth_image, points, point_masks
@@ -1307,15 +1298,15 @@ class VLAFlowMatching(nn.Module):
                 inputs_embeds=prefix_embs,
             )
 
-            action_out = self.forward_suffix(
+            action_out, result = self.forward_suffix(
                 past_key_values, attention_matrix_cross,
                 suffix_embs, attention_matrix_suffix, suffix_position_ids,
             )
             pass
         
         first_box = prefix_out[:, box_range[0]:box_range[0]+1, :] # (B, 1, D)
-        # action_combine = action_out + first_box
-        v_t = self.action_out_proj(action_out)
+        action_combine = action_out + first_box
+        v_t = self.action_out_proj(action_combine)
 
         box_out = prefix_out[:, box_range[0]:box_range[1], :]  # (B, num_box, D)
         box_pred = self.box_out_proj(box_out)
@@ -1328,7 +1319,6 @@ class VLAFlowMatching(nn.Module):
         loss_box = F.mse_loss(boxes, box_pred, reduction="none") * self.config.loss_weights["box"]
         loss_depth = F.mse_loss(depth_image, depth_pred, reduction="none") * self.config.loss_weights["depth"]
         loss_point = F.mse_loss(points, point_pred, reduction="none") * self.config.loss_weights["point"]
-        print(f'point pred {point_pred[0]}, point expect {points[0]}')
         
         return loss_action, loss_box, loss_depth, loss_point
 
@@ -1382,7 +1372,7 @@ class VLAFlowMatching(nn.Module):
             time = torch.tensor(1.0, dtype=torch.float32, device=device)
             while time >= -dt / 2:
                 expanded_time = time.expand(bsize)
-                v_t = self.denoise_step(
+                v_t, _ = self.denoise_step(
                     attention_matrix_cross,
                     attention_matrix_suffix,
                     past_key_values,
@@ -1399,12 +1389,13 @@ class VLAFlowMatching(nn.Module):
             x_t = self.action_in_emb.expand(
                 bsize, -1, -1
             )
-            x_t = self.denoise_step(
+            x_t, _ = self.denoise_step(
                 attention_matrix_cross,
                 attention_matrix_suffix,
                 past_key_values,
                 x_t,
                 None,
+                first_box,
             )
             pass
         
@@ -1428,12 +1419,12 @@ class VLAFlowMatching(nn.Module):
             suffix_embs, suffix_pad_masks, suffix_position_ids = self.embed_suffix_autoregressive(x_t.shape[0])
             pass
 
-        action_out = self.forward_suffix(
+        action_out, result = self.forward_suffix(
             past_key_values, attention_matrix_cross,
             suffix_embs, attention_matrix_suffix, suffix_position_ids,
         )
 
-        # action_combine = action_out + box_emb
-        v_t_action = self.action_out_proj(action_out)
-        return v_t_action
+        action_combine = action_out + box_emb
+        v_t_action = self.action_out_proj(action_combine)
+        return v_t_action, result
     

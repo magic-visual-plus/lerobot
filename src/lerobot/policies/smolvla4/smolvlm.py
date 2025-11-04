@@ -199,6 +199,8 @@ class SmolVLM(nn.Module):
         inputs_embeds: torch.FloatTensor | None = None,
         past_key_values: list | None = None,
         use_cache: bool = True,
+        output_hidden_states=False,
+        output_attentions=False,
     ):
         if inputs_embeds is None:
             raise ValueError("inputs_embeds cannot be None")
@@ -221,8 +223,10 @@ class SmolVLM(nn.Module):
             inputs_embeds=inputs_embeds,
             past_key_values=DynamicCache.from_legacy_cache(past_key_values),
             use_cache=use_cache,
+            output_hidden_states=output_hidden_states,
+            output_attentions=output_attentions,
         )
 
-        return outputs.last_hidden_state.to(torch.float32)
+        return outputs.last_hidden_state.to(torch.float32), outputs
                 
     pass

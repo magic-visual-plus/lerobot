@@ -41,10 +41,10 @@ class SmolVLA4Config(PreTrainedConfig):
 
     loss_weights: dict[str, float] = field(
         default_factory=lambda: {
-            "action": 0.0,
-            "point": 1.0,
-            "box": 0.0,
-            "depth": 1.0,
+            "action": 1.0,
+            "point": 0,
+            "box": 0.1,
+            "depth": 0.0,
         }
     )
     # Shorter state and action vectors will be padded
@@ -55,8 +55,6 @@ class SmolVLA4Config(PreTrainedConfig):
 
     max_num_embeddings_depth: int = 64
     max_num_embeddings_box: int = 10
-    
-    max_num_point_3d: int = 10
 
     # Image preprocessing
     resize_imgs_with_padding: tuple[int, int] = (512, 512)
@@ -77,7 +75,7 @@ class SmolVLA4Config(PreTrainedConfig):
     tokenizer_max_length: int = 48
 
     # Decoding
-    num_steps: int = 10
+    num_steps: int = 0
 
     # Attention utils
     use_cache: bool = True
