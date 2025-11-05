@@ -14,13 +14,15 @@ from sys import version
 import time
 from typing import Any
 from loguru import logger
-from numpy._core.numeric import True_
+# from numpy._core.numeric import True_
 from eval_save import LeRobotEvalSave
 
 # use huggingface mirror
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 # os.environ["MUJOCO_GL"] = "egl"
 # os.environ["MUJOCO_GL"] = "osmesa"
+# os.environ['PYOPENGL_PLATFORM'] = 'osmesa'
+
 
 import cv2
 import draccus
@@ -35,6 +37,7 @@ from scipy.spatial.transform import Rotation as R
 from lerobot.policies.smolvla3.modeling_smolvla3 import SmolVLA3Policy
 from lerobot.policies.smolvla2.modeling_smolvla2 import SmolVLA2Policy
 from lerobot.policies.smolvla4.modeling_smolvla4 import SmolVLA4Policy
+from lerobot.policies.smolvla5.modeling_smolvla5 import SmolVLA5Policy
 from lerobot.policies.pretrained import PreTrainedPolicy
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -135,6 +138,7 @@ policy_version_map: dict[str, Any] = {
     "v2" : SmolVLA2Policy,
     "v3" : SmolVLA3Policy,
     "v4" : SmolVLA4Policy,
+    "v5": SmolVLA5Policy,
 }
 
 def init_policy(args: Args ):
