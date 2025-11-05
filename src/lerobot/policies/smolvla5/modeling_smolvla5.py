@@ -1261,11 +1261,11 @@ class VLAFlowMatching(nn.Module):
             # disable depth attention
             attention_matrix_cross[:, :, depth_range[0]:depth_range[1]] = False
             # disable point attention
-            attention_matrix_cross[:, :, point_range[0]:point_range[1]] = False
+            attention_matrix_cross[:, :, point_range[0] + 3:point_range[1]] = False
             # disable depth attention
             attention_matrix_cross[:, :, lang_range[0]:lang_range[1]] = False
             # only attention to first box
-            attention_matrix_cross[:, :, box_range[0]+1:box_range[1]] = False
+            attention_matrix_cross[:, :, box_range[0]:box_range[1]] = False
             # suffix attention: full attention within suffix
             attention_matrix_suffix[:, :, :] = True
         else:
