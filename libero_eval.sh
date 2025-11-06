@@ -12,7 +12,7 @@
 # proxychains python /opt/projects/news/lerobot/examples/libero/eval_smol2.py --policy_path=/opt/projects/news/lerobot/outputs/train/libero_smolvla2_0829_goal/checkpoints/050000/pretrained_model --video_out_path=data/libero/videos_goal_0830_05_test --task_suite_name=libero_goal
 
 # echo "next"
-proxychains python /opt/projects/news/lerobot/examples/libero/eval_smol2.py --policy_path=/opt/projects/news/lerobot/ckpts/autodl/one/040000/pretrained_model --video_out_path=data/libero/videos_goal_0906_one --task_suite_name=libero_goal
+# proxychains python /opt/projects/news/lerobot/examples/libero/eval_smol2.py --policy_path=/opt/projects/news/lerobot/ckpts/autodl/one/040000/pretrained_model --video_out_path=data/libero/videos_goal_0906_one --task_suite_name=libero_goal
 
 # test_6d
 # proxychains python /opt/projects/news/lerobot/examples/libero/eval_smol26d.py --policy_path=/opt/projects/news/lerobot/outputs/train/libero_smolvla2_0829_goal_6d/checkpoints/020000/pretrained_model --video_out_path=data/libero/videos_goal6d_0904_06_test --task_suite_name=libero_goal

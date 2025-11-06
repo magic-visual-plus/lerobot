@@ -1257,7 +1257,9 @@ class VLAFlowMatching(nn.Module):
         
         if suffix_pad_masks is not None:
             # cross attention: suffix can attend to all prefix tokens
-            attention_matrix_cross[:, :, :] = True
+            attention_matrix_cross[:, :, :] = True 
+            # disable image attention
+            attention_matrix_cross[:, :, img_range[0]:img_range[1]] = False
             # disable depth attention
             attention_matrix_cross[:, :, depth_range[0]:depth_range[1]] = False
             # disable point attention

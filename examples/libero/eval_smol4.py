@@ -17,6 +17,8 @@ from loguru import logger
 # from numpy._core.numeric import True_
 from eval_save import LeRobotEvalSave
 
+# sys.path.append("/mnt/e/dev/LIBERO")
+
 # use huggingface mirror
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 # os.environ["MUJOCO_GL"] = "egl"
