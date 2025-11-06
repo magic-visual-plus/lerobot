@@ -1140,6 +1140,7 @@ class VLAFlowMatching(nn.Module):
         if suffix_pad_masks is not None:
             # cross attention: suffix can attend to all prefix tokens
             attention_matrix_cross[:, :, :] = True
+            attention_matrix_cross[:, :, lang_range[0]:lang_range[1]] = False  # no lang attention from suffix
 
             # suffix attention: full attention within suffix
             attention_matrix_suffix[:, :, :] = True
@@ -1322,8 +1323,8 @@ class VLAFlowMatching(nn.Module):
             )
             pass
 
-        box_emb = prefix_embs[:, box_range[0]:box_range[1], :]  # (B, num_box, D)
-        depth_emb = prefix_embs[:, depth_range[0]:depth_range[1], :]
+        box_emb = embs[:, box_range[0]:box_range[1], :]  # (B, num_box, D)
+        depth_emb = embs[:, depth_range[0]:depth_range[1], :]
 
         box_pred, box_labels, _ = self.box_decoder.predict(
             self.action_expert, past_key_values, prefix_embs.shape[0],
