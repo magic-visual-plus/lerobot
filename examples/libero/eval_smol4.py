@@ -14,13 +14,17 @@ from sys import version
 import time
 from typing import Any
 from loguru import logger
-from numpy._core.numeric import True_
+# from numpy._core.numeric import True_
 from eval_save import LeRobotEvalSave
+
+# sys.path.append("/mnt/e/dev/LIBERO")
 
 # use huggingface mirror
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 # os.environ["MUJOCO_GL"] = "egl"
 # os.environ["MUJOCO_GL"] = "osmesa"
+# os.environ['PYOPENGL_PLATFORM'] = 'osmesa'
+
 
 import cv2
 import draccus
