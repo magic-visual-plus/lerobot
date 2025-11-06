@@ -35,6 +35,7 @@ from scipy.spatial.transform import Rotation as R
 from lerobot.policies.smolvla3.modeling_smolvla3 import SmolVLA3Policy
 from lerobot.policies.smolvla2.modeling_smolvla2 import SmolVLA2Policy
 from lerobot.policies.smolvla4.modeling_smolvla4 import SmolVLA4Policy
+from lerobot.policies.smolvla5.modeling_smolvla5 import SmolVLA5Policy
 from lerobot.policies.pretrained import PreTrainedPolicy
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -51,6 +52,7 @@ NEED_RAND_POS = True
 # NEED_RAND_POS = False
 POS_LEVEL = 1
 NEED_BBOX = False
+NEED_DEPTH = True
 NEED_POINT = False
 NEED_RAND_CAM = False
 
@@ -120,7 +122,7 @@ class Args:
     """Number of rollouts per task."""
 
     # --- Evaluation arguments ---
-    video_out_path: str = "data/libero/1019/new_goal_autodl_add_point_5w"
+    video_out_path: str = "data/libero/videos"
     """Path to save videos."""
     device: str = "cuda"
     """Device to use for evaluation."""
@@ -128,13 +130,14 @@ class Args:
     seed: int = 7
     """Random Seed (for reproducibility)"""
     # 预测的版本
-    version: str = "v4"
+    version: str = "v5"
 
 
 policy_version_map: dict[str, Any] = {
     "v2" : SmolVLA2Policy,
     "v3" : SmolVLA3Policy,
     "v4" : SmolVLA4Policy,
+    "v5" : SmolVLA5Policy,
 }
 
 def init_policy(args: Args ):
@@ -301,6 +304,7 @@ def eval_libero(args: Args) -> None:
             # Setup
             t = 0
             frames = []
+            depth_frames = []
             done = False
 
             # Add initial frame
@@ -387,7 +391,7 @@ def eval_libero(args: Args) -> None:
                     # Query model to get action
                     with torch.inference_mode():
                         start = time.time()
-                        action_result_tensor = policy.select_action(observation, need_bbox = NEED_BBOX)
+                        action_result_tensor = policy.select_action(observation, need_bbox = (NEED_BBOX | NEED_DEPTH))
                         if NEED_BBOX:
                             frames.pop()
                             bbox = action_result_tensor['box']
@@ -418,6 +422,27 @@ def eval_libero(args: Args) -> None:
                             env.close()
                             del env
                             sys.exit(-1)
+                            pass
+                        if NEED_DEPTH:
+                            depth_image = action_result_tensor['depth_image']
+                            action_tensor = action_result_tensor['action']
+                            depth_image_np = depth_image[0, 0, :, :].cpu().numpy()
+                            # if len(depth_frames) == 0:
+                            #     first_depth_image = depth_image_np.copy()
+                            #     pass
+                            # else:
+                            #     print( np.abs(depth_image_np - first_depth_image).sum())
+                            #     pass
+                            # normalize to 0-255
+                            depth_image_np = (depth_image_np - depth_image_np.min()) / (depth_image_np.max() - depth_image_np.min() + 1e-8)
+                            depth_image_np = (depth_image_np * 255).astype(np.uint8)
+                            
+                            # depth_image_np = cv2.cvtColor(depth_image_np, cv2.COLOR_GRAY2BGR)
+                            depth_image_np = cv2.applyColorMap(depth_image_np, cv2.COLORMAP_JET)
+                            # print(depth_image_np)
+                            # print("depth image shape: ", depth_image_np.shape, depth_image_np.dtype)
+                            depth_frames.append(depth_image_np)
+                            pass
                         end = time.time()
                         # logging.info(f"Inference time: {(end-start) * 1000 :.2f}ms")
                     action = action_tensor.cpu().numpy()[0]
@@ -459,6 +484,9 @@ def eval_libero(args: Args) -> None:
             video_path = (
                 pathlib.Path(args.video_out_path) / f"rollout_task_{task_id}_episode_{episode_idx}_{task_segment}_{suffix}.mp4"
             )
+            depth_video_path = (
+                pathlib.Path(args.video_out_path) / f"depth_task_{task_id}_episode_{episode_idx}_{task_segment}_{suffix}.mp4"
+            )
             fps = 20
             writer = imageio.get_writer(video_path, fps=fps)
 
@@ -466,6 +494,12 @@ def eval_libero(args: Args) -> None:
                 writer.append_data(image)
             writer.close()
             logging.info(f"Saved video to {video_path}")
+            if NEED_DEPTH:
+                depth_writer = imageio.get_writer(depth_video_path, fps=fps)
+                for depth_image in depth_frames:
+                    depth_writer.append_data(depth_image)
+                depth_writer.close()
+                logging.info(f"Saved depth video to {depth_video_path}")
             # import ipdb; ipdb.set_trace()
 
             # Log current results
