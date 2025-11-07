@@ -40,6 +40,7 @@ from lerobot.policies.smolvla3.modeling_smolvla3 import SmolVLA3Policy
 from lerobot.policies.smolvla2.modeling_smolvla2 import SmolVLA2Policy
 from lerobot.policies.smolvla4.modeling_smolvla4 import SmolVLA4Policy
 from lerobot.policies.smolvla5.modeling_smolvla5 import SmolVLA5Policy
+from lerobot.policies.smolvla6.modeling_smolvla6 import SmolVLA6Policy
 from lerobot.policies.pretrained import PreTrainedPolicy
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -134,7 +135,7 @@ class Args:
     seed: int = 7
     """Random Seed (for reproducibility)"""
     # 预测的版本
-    version: str = "v5"
+    version: str = "v6"
 
 
 policy_version_map: dict[str, Any] = {
@@ -142,6 +143,7 @@ policy_version_map: dict[str, Any] = {
     "v3" : SmolVLA3Policy,
     "v4" : SmolVLA4Policy,
     "v5" : SmolVLA5Policy,
+    "v6" : SmolVLA6Policy,
 }
 
 def init_policy(args: Args ):
