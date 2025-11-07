@@ -17,8 +17,6 @@ from loguru import logger
 # from numpy._core.numeric import True_
 from eval_save import LeRobotEvalSave
 
-# sys.path.append("/mnt/e/dev/LIBERO")
-
 # use huggingface mirror
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 # os.environ["MUJOCO_GL"] = "egl"
@@ -57,6 +55,7 @@ NEED_RAND_POS = True
 POS_LEVEL = 1
 NEED_BBOX = False
 NEED_POINT = False
+NEED_3D_POINT = True
 NEED_RAND_CAM = False
 
 DISABLE_STATE = False
@@ -144,8 +143,8 @@ policy_version_map: dict[str, Any] = {
 }
 
 def init_policy(args: Args ):
-    print(f'args version {args.version}')
     policy_clazz = policy_version_map[args.version]
+    print(f'args version {args.version} policy type {type(policy_clazz)}')
     policy = policy_clazz.from_pretrained(args.policy_path)
      # Handle accelerate-wrapped models by unwrapping them
     if hasattr(policy, 'module') and isinstance(policy.module, PreTrainedPolicy):
@@ -160,6 +159,46 @@ def init_policy(args: Args ):
     policy.eval()
     return policy
 
+
+def project_point_to_camera_from_params(point3d, cam_pos, cam_mat, fovy, width, height):
+    """
+    使用相机参数将 3D 世界坐标点投影到相机视图下的 2D 像素坐标。
+    
+    参数:
+        point3d: np.array([x, y, z]) 世界坐标点
+        cam_pos: np.array([x, y, z]) 相机位置
+        cam_mat: np.array(3, 3) 相机旋转矩阵（从相机坐标系到世界坐标系，即cam_xmat的转置就是世界到相机）
+        fovy: 垂直视野角度
+        width: 图像宽度
+        height: 图像高度
+
+    返回:
+        (u, v): 投影后的图像像素坐标 (float)
+        或 None 如果点在相机后面
+    """
+    # 转换点到相机坐标系
+    # MuJoCo的cam_xmat是从相机坐标系到世界坐标系的旋转矩阵
+    # 所以我们需要使用其转置来将点从世界坐标系转换到相机坐标系
+    p_cam = cam_mat.T @ (point3d - cam_pos)
+    
+    # print(f"Point in camera coordinates: {p_cam}")
+    
+    # 计算相机的内参
+    fy = height / (2 * np.tan(0.5 * np.deg2rad(fovy)))
+    fx = fy  # 通常正方像素
+    
+    # 投影到 2D
+    # 注意MuJoCo相机坐标系的Y轴可能需要翻转
+    u = fx * (p_cam[0] / p_cam[2]) + width / 2
+    v = fy * (-p_cam[1] / p_cam[2]) + height / 2  # Y轴翻转
+    
+    # 检查投影点是否在图像范围内
+    # if 0 <= u < width and 0 <= v < height:
+    #     print(f"Point projected to image coordinates: ({u:.2f}, {v:.2f})")
+    # else:
+    #     print(f"Warning: Projected point ({u:.2f}, {v:.2f}) is outside image bounds")
+    
+    return float(u), float(v)
 
 @draccus.wrap()
 def eval_libero(args: Args) -> None:
@@ -189,7 +228,7 @@ def eval_libero(args: Args) -> None:
     elif args.task_suite_name == "libero_object":
         max_steps = 280  # longest training demo has 254 steps
     elif args.task_suite_name == "libero_goal":
-        max_steps = 300  # longest training demo has 270 steps
+        max_steps = 600  # longest training demo has 270 steps
     elif args.task_suite_name == "libero_10":
         max_steps = 520  # longest training demo has 505 steps
     elif args.task_suite_name == "libero_90":
@@ -224,6 +263,14 @@ def eval_libero(args: Args) -> None:
 
         # Initialize LIBERO environment and task description
         env, task_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, args.seed)
+        
+        cam_id = env.sim.model.camera_name2id('agentview')
+        cam_pos = env.env.sim.data.cam_xpos[cam_id]  # 相机位置
+        # 从 相机坐标系 → 世界坐标系 的旋转矩阵。
+        cam_mat = env.env.sim.data.cam_xmat[cam_id].reshape(3, 3)  # 相机旋转矩阵
+        fovy =  env.env.sim.model.cam_fovy[cam_id]  # 垂直视野角度
+        width = LIBERO_ENV_RESOLUTION
+        height = LIBERO_ENV_RESOLUTION
         
         # Start episodes
         task_episodes, task_successes = 0, 0
@@ -393,8 +440,34 @@ def eval_libero(args: Args) -> None:
                     # Query model to get action
                     with torch.inference_mode():
                         start = time.time()
-                        action_result_tensor = policy.select_action(observation, need_bbox = NEED_BBOX)
-                        if NEED_BBOX:
+                        action_result_tensor = policy.select_action(observation, need_bbox = NEED_BBOX or NEED_3D_POINT)
+                        if NEED_3D_POINT:
+                            frames.pop()
+                            action_tensor = action_result_tensor['action']
+                            points = action_result_tensor['point']
+                                # first point
+                            points_3d: Any = points[0, :3, :].cpu().numpy()
+                            colors = [(0, 0, 255), (255, 0, 0), (0, 255, 0), (255, 255, 0), (255, 0, 255)]
+                            for idx, obj_point_3d in enumerate(points_3d):
+                                # print(f'idx {idx}, obj_point_3d {obj_point_3d}')
+                                # if idx != 0:
+                                #     continue
+                                projected_point = project_point_to_camera_from_params(obj_point_3d, cam_pos, cam_mat, fovy, width, height)
+                                if projected_point is not None:
+                                    u, v = projected_point
+                                    u , v =  width - u, height - v
+                                    print(f"idx {idx}, 3D point {obj_point_3d}, projected to 2D point ({u:.2f}, {v:.2f})")
+                                    if 0 <= u < width and 0 <= v < height:
+                                        # Define different colors for different indices
+                                        color_idx = idx % len(colors)
+                                        circle_color = colors[color_idx]
+                                        cv2.circle(agentview_image_bbox, (int(u), int(v)), 5, circle_color, -1)
+                                        cv2.circle(agentview_image_bbox, (int(u), int(v)), 8, circle_color, 2)
+                                else:
+                                    print(f"3D point {obj_point_3d} not projected to 2D point")
+                            frames.append(agentview_image_bbox)
+                            
+                        elif NEED_BBOX:
                             frames.pop()
                             bbox = action_result_tensor['box']
                             action_tensor = action_result_tensor['action']
@@ -409,6 +482,7 @@ def eval_libero(args: Args) -> None:
                                 (0, 255, 0),
                                 2,
                             )
+                            
                             if NEED_POINT:
                                 points = action_result_tensor['point']
                                 # first point
