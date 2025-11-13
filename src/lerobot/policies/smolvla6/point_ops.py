@@ -7,25 +7,14 @@ from scipy.optimize import linear_sum_assignment
 from transformers.cache_utils import DynamicCache
 
 
-class ObjectBoxDecoder(nn.Module):
+class PointDecoder(nn.Module):
     def __init__(self, hidden_dim, num_classes):
         super().__init__()
 
-        self.box_proj = nn.Linear(hidden_dim, 4)
-        self.box_classifier = nn.Linear(hidden_dim, num_classes)
+        self.proj = nn.Linear(hidden_dim, 3)
+        self.classifier = nn.Linear(hidden_dim, num_classes)
         self.matcher = HungarianMatcher()
         self.num_classes = num_classes
-        pass
-
-    def forward(self, vlm, past_key_values, batch_size):
-        box_embeddings = vlm.forward(
-            inputs_embeds=self.box_queries.expand(batch_size, -1, -1),
-            past_key_values=past_key_values,
-        )
-
-        box_pred = self.box_proj(box_embeddings)
-        class_pred = self.box_classifier(box_embeddings)
-        return box_pred, class_pred
         pass
     
     def tensor2list(self, boxes, classes, masks):
@@ -39,22 +28,20 @@ class ObjectBoxDecoder(nn.Module):
             pass
         return box_list, class_list
     
-    def forward_loss(self, box_queries_emb, box_target, class_target, mask_target): 
-        box_list, class_list = self.tensor2list(box_target, class_target, mask_target)
-        box_pred = self.box_proj(box_queries_emb)
-        class_pred = self.box_classifier(box_queries_emb)
-        box_pred[:, :, 2:] = torch.sigmoid(box_pred[:, :, 2:])  # width and height should be positive
+    def forward_loss(self, queries_emb, target, class_target, mask_target): 
+        target_list, class_list = self.tensor2list(target, class_target, mask_target)
+        pred = self.proj(queries_emb)
+        class_pred = self.classifier(queries_emb)
 
-        loss_class, loss_box = self.compute_loss(box_pred, class_pred, box_list, class_list)
+        loss_class, loss_box = self.compute_loss(pred, class_pred, target_list, class_list)
 
         return loss_class.mean() + loss_box.mean()
         pass
 
-    def predict(self, box_queries_emb, batch_size, score_thresh=0.5):
+    def predict(self, queries_emb, batch_size, score_thresh=0.5):
 
-        box_pred = self.box_proj(box_queries_emb)
-        class_pred = self.box_classifier(box_queries_emb)
-        box_pred[:, :, 2:] = torch.sigmoid(box_pred[:, :, 2:])  # width and height should be positive
+        box_pred = self.proj(queries_emb)
+        class_pred = self.classifier(queries_emb)
 
         prob = class_pred.sigmoid()
         scores, labels = prob.max(-1)
@@ -71,13 +58,13 @@ class ObjectBoxDecoder(nn.Module):
         return batch_boxes, batch_labels, batch_scores
         pass
 
-    def compute_loss(self, box_pred, class_pred, box_target, class_target):
-        match_pairs = self.matcher(class_pred, box_pred, class_target, box_target)
+    def compute_loss(self, pred, class_pred, target, class_target):
+        match_pairs = self.matcher(class_pred, pred, class_target, target)
         
         # compute label loss
         loss_class = self.compute_loss_class(class_pred, class_target, match_pairs)
-        loss_box = self.compute_loss_box(box_pred, box_target, match_pairs)
-        return loss_class, loss_box
+        loss_point = self.compute_loss_box(pred, target, match_pairs)
+        return loss_class, loss_point
         pass
 
     def _get_src_permutation_idx(self, indices):
@@ -146,7 +133,7 @@ class HungarianMatcher(nn.Module):
         self.focal_alpha = focal_alpha
 
     @torch.no_grad()
-    def forward(self, pred_logits, pred_boxes, labels, boxes):
+    def forward(self, pred_logits, pred_xyz, labels, xyz):
         """ Performs the matching
         Params:
             outputs: This is a dict that contains at least these entries:
@@ -168,11 +155,11 @@ class HungarianMatcher(nn.Module):
 
         # We flatten to compute the cost matrices in a batch
         out_prob = pred_logits.flatten(0, 1).sigmoid()  # [batch_size * num_queries, num_classes]
-        out_bbox = pred_boxes.flatten(0, 1)  # [batch_size * num_queries, 4]
+        out_xyz = pred_xyz.flatten(0, 1)  # [batch_size * num_queries, 3]
 
         # Also concat the target labels and boxes
         tgt_ids = torch.cat(labels)
-        tgt_bbox = torch.cat(boxes)
+        tgt_xyz = torch.cat(xyz)
 
         # Compute the classification cost.
         alpha = self.focal_alpha
@@ -182,16 +169,16 @@ class HungarianMatcher(nn.Module):
         cost_class = pos_cost_class[:, tgt_ids] - neg_cost_class[:, tgt_ids]
 
         # Compute the L1 cost between boxes
-        cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
+        cost_bbox = torch.cdist(out_xyz, tgt_xyz, p=1)
             
         # Compute the giou cost betwen boxes            
-        cost_giou = -generalized_box_iou(box_cxcywh_to_xyxy(out_bbox), box_cxcywh_to_xyxy(tgt_bbox))
+        # cost_giou = -generalized_box_iou(box_cxcywh_to_xyxy(out_bbox), box_cxcywh_to_xyxy(tgt_bbox))
 
         # Final cost matrix
-        C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
+        C = self.cost_bbox * cost_bbox + self.cost_class * cost_class # + self.cost_giou * cost_giou
         C = C.view(bs, num_queries, -1).cpu()
 
-        sizes = [len(bboxes) for bboxes in boxes]
+        sizes = [len(d) for d in xyz]
         indices = [linear_sum_assignment(c[i]) for i, c in enumerate(C.split(sizes, -1))]
         return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
 

@@ -372,7 +372,7 @@ class SmolVLA5Policy(PreTrainedPolicy):
     @classmethod
     def _load_as_safetensor(
         cls,
-        model: "SmolVLA4Policy",
+        model: "SmolVLA5Policy",
         model_file: str,
         map_location: str,
         strict: bool,

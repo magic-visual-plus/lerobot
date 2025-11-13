@@ -22,9 +22,9 @@ from lerobot.optim.schedulers import (
 )
 
 
-@PreTrainedConfig.register_subclass("smolvla5")
+@PreTrainedConfig.register_subclass("smolvla6")
 @dataclass
-class SmolVLA5Config(PreTrainedConfig):
+class SmolVLA6Config(PreTrainedConfig):
     # Input / output structure.
     n_obs_steps: int = 1
     chunk_size: int = 8
@@ -43,6 +43,7 @@ class SmolVLA5Config(PreTrainedConfig):
         default_factory=lambda: {
             "action": 1.0,
             "box": 1.0,
+            "point": 1.0,
             "depth": 1.0,
         }
     )
@@ -53,7 +54,8 @@ class SmolVLA5Config(PreTrainedConfig):
     depth_image_size: int = 256
 
     max_num_embeddings_depth: int = 64
-    max_num_embeddings_box: int = 10
+    max_num_embeddings_box: int = 20
+    max_num_embeddings_point_3d: int = 20
 
     # Image preprocessing
     resize_imgs_with_padding: tuple[int, int] = (512, 512)
@@ -92,7 +94,7 @@ class SmolVLA5Config(PreTrainedConfig):
     optimizer_grad_clip_norm: float = 10
 
     scheduler_warmup_steps: int = 1_000
-    scheduler_decay_steps: int = 60_000
+    scheduler_decay_steps: int = 10_000
     scheduler_decay_lr: float = 1e-6
 
     vlm_model_name: str = "HuggingFaceTB/SmolVLM2-256M-Video-Instruct"  # Select the VLM backbone.

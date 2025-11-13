@@ -22,3 +22,4 @@ from .smolvla2.configuration_smolvla2 import SmolVLA2Config as SmolVLA2Config
 from .smolvla3.configuration_smolvla3 import SmolVLA3Config as SmolVLA3Config
 from .smolvla4.configuration_smolvla4 import SmolVLA4Config as SmolVLA4Config
 from .smolvla5.configuration_smolvla5 import SmolVLA5Config as SmolVLA5Config
+from .smolvla6.configuration_smolvla6 import SmolVLA6Config as SmolVLA6Config

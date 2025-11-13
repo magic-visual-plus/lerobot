@@ -109,6 +109,8 @@ def update_policy(
         train_metrics.loss_action = output_dict["loss_action"]
     if "loss_box" in output_dict:
         train_metrics.loss_box = output_dict["loss_box"]
+    if "loss_point" in output_dict:
+        train_metrics.loss_point = output_dict["loss_point"]
     if "loss_depth" in output_dict:
         train_metrics.loss_depth = output_dict["loss_depth"]
         pass
@@ -207,6 +209,7 @@ def train(cfg: TrainPipelineConfig):
         "dataloading_s": AverageMeter("data_s", ":.3f"),
         "loss_action": AverageMeter("action", ":.3f"),
         "loss_box": AverageMeter("box", ":.3f"),
+        "loss_point": AverageMeter("point", ":.3f"),
         "loss_depth": AverageMeter("depth", ":.3f"),
     }
 
